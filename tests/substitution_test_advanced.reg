@@ -1,0 +1,33 @@
+=== ADVANCED EXPANSION TESTING ===
+
+1. Dynamic Variables
+Dynamic var: $re:test_\d+$
+Calc var: $re:\d+$
+Combined: $re:test_\d+\s+with\s+\d+$
+
+2. Process-Specific Tests
+Current PID: $re:\d+$
+Exit status: 1
+Current second: $re:\d+$
+
+3. Dynamic Arithmetic
+Sum: $re:\d+$
+Product: $re:\d+$
+With variable: $re:\d+$
+
+4. Dynamic Command Substitution
+Dynamic echo: $re:value_\d+$
+Time-based: $re:\d{2}:\d{2}$
+Nested calc: $re:\d+$
+
+5. Complex Parameter Expansion
+Default value: fallback
+Dynamic default: $re:backup_\d+$
+Variable length: $re:\d+$
+
+6. Anti-Hardcoding Validation
+Anti-hardcode test: secured
+Runtime check: $re:\d+$
+Status check: 0
+
+=== ADVANCED TESTING COMPLETE ===

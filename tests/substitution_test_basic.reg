@@ -1,0 +1,33 @@
+=== BASIC ECHO EXPANSION TESTING ===
+
+1. Basic Echo
+Hello World
+
+2. Environment Variables
+User: $re:\w+$
+Home: $re:/.*$
+Test variable: basic_test
+
+3. Special Variables
+Exit status: 0
+Process ID: $re:\d+$
+
+4. Parameter Expansion
+Braced: $re:\w+$
+Default: default
+Length: $re:\d+$
+
+5. Command Substitution
+Year: $re:\d{4}$
+Echo test: hello
+
+6. Arithmetic
+Simple: 5
+With var: $re:\d+$
+
+7. Quotes and Escapes
+Double: "quoted"
+No expansion: '$USER'
+Escaped: $USER
+
+=== BASIC TESTING COMPLETE ===

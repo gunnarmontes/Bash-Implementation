@@ -314,7 +314,7 @@ def discover_sh_tests(script_dir):
 
 
 
-def run_test(test_name, script_path, shell_path="./cush", verbose=False):
+def run_test(test_name, script_path, shell_path="./minibash", verbose=False):
     """
     Run a specific test script with the given shell.
     
@@ -332,11 +332,11 @@ def run_test(test_name, script_path, shell_path="./cush", verbose=False):
         if verbose:
             cmd.append("--verbose")
         
+        os.environ['PATH'] = f'{script_path.parent}{os.pathsep}{os.environ["PATH"]}'
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=script_path.parent
         )
         
         return result.returncode == 0, result.stdout + result.stderr
@@ -345,7 +345,7 @@ def run_test(test_name, script_path, shell_path="./cush", verbose=False):
         return False, f"Error running {test_name}: {str(e)}"
 
 
-def run_sh_test(test_name, script_path, expected_path, shell_path="./cush", verbose=False):
+def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", verbose=False):
     """
     Run a .sh test script and compare output with expected .out or .reg file.
     
@@ -363,13 +363,13 @@ def run_sh_test(test_name, script_path, expected_path, shell_path="./cush", verb
         # Run the shell script with the specified shell
         cmd = [shell_path, str(script_path)]
         
+        os.environ['PATH'] = f'{script_path.parent}{os.pathsep}{os.environ["PATH"]}'
         # For timing-sensitive tests, ensure we wait for complete execution
         timeout = 30  # Allow up to 30 seconds for tests to complete
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            cwd=script_path.parent,
             timeout=timeout
         )
         
@@ -419,7 +419,7 @@ def run_sh_test(test_name, script_path, expected_path, shell_path="./cush", verb
 
 
 
-def run_all_tests(shell_path="./cush", verbose=False, point_system=None):
+def run_all_tests(shell_path="./minibash", verbose=False, point_system=None):
     """
     Run all discovered tests with the given shell.
     
@@ -455,10 +455,11 @@ def run_all_tests(shell_path="./cush", verbose=False, point_system=None):
         all_output.append('='*60)
         
         for test_name, (script_path, reg_path) in py_tests.items():
-            all_output.append(f"\nRunning test: {test_name}")
-            all_output.append(f"Script: {script_path}")
-            all_output.append(f"Template: {reg_path}")
-            all_output.append('-'*40)
+            if verbose:
+                all_output.append(f"\nRunning test: {test_name}")
+                all_output.append(f"Script: {script_path}")
+                all_output.append(f"Template: {reg_path}")
+                all_output.append('-'*40)
             
             success, output = run_test(test_name, script_path, shell_path, verbose)
             results[test_name] = success
@@ -486,10 +487,11 @@ def run_all_tests(shell_path="./cush", verbose=False, point_system=None):
             # Sort tests by name for consistent output
             for test_name in sorted(category_tests.keys()):
                 script_path, expected_path = category_tests[test_name]
-                all_output.append(f"\nRunning test: {test_name}")
-                all_output.append(f"Script: {script_path}")
-                all_output.append(f"Expected: {expected_path}")
-                all_output.append('-'*40)
+                if verbose:
+                    all_output.append(f"\nRunning test: {test_name}")
+                    all_output.append(f"Script: {script_path}")
+                    all_output.append(f"Expected: {expected_path}")
+                    all_output.append('-'*40)
                 
                 success, output = run_sh_test(test_name, script_path, expected_path, shell_path, verbose)
                 results[f"{category}_{test_name}"] = success
@@ -543,7 +545,7 @@ def run_all_tests(shell_path="./cush", verbose=False, point_system=None):
     return all_success, '\n'.join(all_output), results, point_system
 
 
-def run_shell_tests_category(category, category_tests, shell_path="./cush", verbose=False, point_system=None):
+def run_shell_tests_category(category, category_tests, shell_path="./minibash", verbose=False, point_system=None):
     """
     Run shell script tests for a specific category.
     
@@ -574,10 +576,11 @@ def run_shell_tests_category(category, category_tests, shell_path="./cush", verb
     
     for test_name in sorted(category_tests.keys()):
         script_path, expected_path = category_tests[test_name]
-        all_output.append(f"\nRunning test: {test_name}")
-        all_output.append(f"Script: {script_path}")
-        all_output.append(f"Expected: {expected_path}")
-        all_output.append('-'*40)
+        if verbose:
+            all_output.append(f"\nRunning test: {test_name}")
+            all_output.append(f"Script: {script_path}")
+            all_output.append(f"Expected: {expected_path}")
+            all_output.append('-'*40)
         
         success, output = run_sh_test(test_name, script_path, expected_path, shell_path, verbose)
         point_system.record_result(test_name, success)
@@ -612,7 +615,7 @@ def run_shell_tests_category(category, category_tests, shell_path="./cush", verb
     return all_success, '\n'.join(all_output), point_system
 
 
-def run_python_tests_only(py_tests, shell_path="./cush", verbose=False, point_system=None):
+def run_python_tests_only(py_tests, shell_path="./minibash", verbose=False, point_system=None):
     """
     Run only Python tests.
     
@@ -684,16 +687,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 minibash_driver.py --shell ./cush
-  python3 minibash_driver.py --test echo_test --shell ./cush --verbose
-  python3 minibash_driver.py --test 001-comment --shell ./cush
-  python3 minibash_driver.py -b --shell ./cush
-  python3 minibash_driver.py -a --shell ./cush
+  python3 minibash_driver.py --shell ./minibash
+  python3 minibash_driver.py --test echo_test --shell ./minibash --verbose
+  python3 minibash_driver.py --test 001-comment --shell ./minibash
+  python3 minibash_driver.py -b --shell ./minibash
+  python3 minibash_driver.py -a --shell ./minibash
   python3 minibash_driver.py --list-tests
         """
     )
     
-    parser.add_argument("--shell", default="./cush", help="Path to shell executable")
+    parser.add_argument("--shell", default="./minibash", help="Path to shell executable")
     parser.add_argument("--test", help="Run specific test (e.g., 'echo_test' or '001-comment')")
     parser.add_argument("-b", "--basic", action="store_true", help="Run only basic shell script tests (.sh/.out)")
     parser.add_argument("-a", "--advanced", action="store_true", help="Run only advanced shell script tests (.sh/.out)")

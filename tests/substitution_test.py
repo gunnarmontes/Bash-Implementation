@@ -261,17 +261,17 @@ Anti-Hardcoding Features:
 - Multi-level arithmetic with random operands
 
 Examples:
-  python3 expansion_test.py --shell ./cush                    # Run both basic and advanced tests
-  python3 expansion_test.py --shell ./cush -b                 # Run only basic tests  
-  python3 expansion_test.py --shell ./cush -a                 # Run only advanced tests
+  python3 expansion_test.py --shell ./minibash                    # Run both basic and advanced tests
+  python3 expansion_test.py --shell ./minibash -b                 # Run only basic tests  
+  python3 expansion_test.py --shell ./minibash -a                 # Run only advanced tests
   python3 expansion_test.py --shell /bin/bash --verbose       # Run both tests with verbose output
         """
     )
     
     parser.add_argument(
         '--shell',
-        default='./cush',
-        help='Path to the shell executable to test (default: ./cush)'
+        default='./minibash',
+        help='Path to the shell executable to test (default: ./minibash)'
     )
     
     parser.add_argument(

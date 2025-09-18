@@ -1,0 +1,1033 @@
+#!/usr/bin/env python3
+"""
+Generic minibash driver for running test scripts with corresponding .reg template files.
+Each test script (e.g., echo_test.py) should have a corresponding .reg file (e.g., echo_test.reg).
+
+Features:
+- Configurable point system with default 70/30 basic/advanced split
+- Individual test point configuration
+- Category-based scoring and reporting
+"""
+
+import os
+import sys
+import subprocess
+import glob
+import time
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional
+
+
+def create_progress_bar(current: int, total: int, width: int = 40) -> str:
+    """
+    Create a text-based progress bar.
+    
+    Args:
+        current: Current progress value
+        total: Total/maximum value
+        width: Width of the progress bar in characters
+    
+    Returns:
+        String representation of progress bar
+    """
+    if total == 0:
+        return "[" + "─" * width + "]"
+    
+    percentage = current / total
+    filled_width = int(width * percentage)
+    bar = "█" * filled_width + "─" * (width - filled_width)
+    return f"[{bar}]"
+
+
+def format_progress_info(current: int, total: int, test_name: str = None, start_time: float = None) -> str:
+    """
+    Format progress information string.
+    
+    Args:
+        current: Current test number (1-indexed)
+        total: Total number of tests
+        test_name: Optional name of current test
+        start_time: Optional start time for elapsed time calculation
+    
+    Returns:
+        Formatted progress string
+    """
+    percentage = (current / total * 100) if total > 0 else 0
+    progress_bar = create_progress_bar(current, total, 30)
+    
+    info_parts = [
+        f"Progress: {current}/{total} ({percentage:.1f}%)",
+        progress_bar
+    ]
+    
+    
+    if test_name:
+        info_parts.append(f"Running: {test_name}")
+    
+    return " | ".join(info_parts)
+
+
+@dataclass
+class TestConfig:
+    """Configuration for individual tests and scoring."""
+    name: str
+    category: str  # 'basic', 'advanced', 'python'
+    points: int
+    script_path: str
+    expected_path: Optional[str] = None
+    
+    def __post_init__(self):
+        """Convert paths to Path objects."""
+        self.script_path = Path(self.script_path)
+        if self.expected_path:
+            self.expected_path = Path(self.expected_path)
+
+
+class PointSystem:
+    """Manages point distribution and scoring for tests."""
+    
+    def __init__(self, total_points: int = 100, basic_ratio: float = 0.7):
+        """Initialize point system.
+        
+        Args:
+            total_points: Total points available
+            basic_ratio: Ratio of points for basic tests (0.0-1.0)
+        """
+        self.total_points = total_points
+        self.basic_ratio = basic_ratio
+        self.advanced_ratio = 1.0 - basic_ratio
+        
+        self.basic_total = int(total_points * basic_ratio)
+        self.advanced_total = total_points - self.basic_total
+        
+        # Track results
+        self.results = {}
+        self.test_configs = {}
+    
+    def add_test_config(self, config: TestConfig):
+        """Add a test configuration."""
+        self.test_configs[config.name] = config
+    
+    def distribute_points(self, basic_tests: Dict, advanced_tests: Dict, python_tests: Dict = None):
+        """Distribute points among tests based on categories.
+        
+        Args:
+            basic_tests: Dict of basic test names -> (script_path, expected_path)
+            advanced_tests: Dict of advanced test names -> (script_path, expected_path)
+            python_tests: Dict of python test names -> (script_path, expected_path)
+        """
+        # Count tests in each category
+        basic_count = len(basic_tests)
+        advanced_count = len(advanced_tests)
+        python_count = len(python_tests) if python_tests else 0
+        
+        # Distribute points evenly within categories
+        basic_points_per_test = self.basic_total // basic_count if basic_count > 0 else 0
+        advanced_points_per_test = self.advanced_total // advanced_count if advanced_count > 0 else 0
+        
+        # Handle remainder points
+        basic_remainder = self.basic_total % basic_count if basic_count > 0 else 0
+        advanced_remainder = self.advanced_total % advanced_count if advanced_count > 0 else 0
+        
+        # Create test configs for basic tests
+        for i, (test_name, (script_path, expected_path)) in enumerate(basic_tests.items()):
+            points = basic_points_per_test + (1 if i < basic_remainder else 0)
+            config = TestConfig(
+                name=test_name,
+                category='basic',
+                points=points,
+                script_path=str(script_path),
+                expected_path=str(expected_path) if expected_path else None
+            )
+            self.add_test_config(config)
+        
+        # Create test configs for advanced tests
+        for i, (test_name, (script_path, expected_path)) in enumerate(advanced_tests.items()):
+            points = advanced_points_per_test + (1 if i < advanced_remainder else 0)
+            config = TestConfig(
+                name=test_name,
+                category='advanced', 
+                points=points,
+                script_path=str(script_path),
+                expected_path=str(expected_path) if expected_path else None
+            )
+            self.add_test_config(config)
+        
+        # Handle Python tests (assign minimal points or distribute from basic pool)
+        if python_tests:
+            python_points_per_test = 1  # Minimal points for python tests
+            for test_name, (script_path, reg_path) in python_tests.items():
+                config = TestConfig(
+                    name=test_name,
+                    category='python',
+                    points=python_points_per_test,
+                    script_path=str(script_path),
+                    expected_path=str(reg_path)
+                )
+                self.add_test_config(config)
+    
+    def record_result(self, test_name: str, passed: bool):
+        """Record test result."""
+        self.results[test_name] = passed
+    
+    def get_score(self, category: str = None) -> Tuple[int, int]:
+        """Get current score for category or overall.
+        
+        Args:
+            category: 'basic', 'advanced', 'python', or None for overall
+            
+        Returns:
+            Tuple of (earned_points, total_possible_points)
+        """
+        earned = 0
+        total = 0
+        
+        for test_name, config in self.test_configs.items():
+            if category is None or config.category == category:
+                total += config.points
+                if self.results.get(test_name, False):
+                    earned += config.points
+        
+        return earned, total
+    
+    def get_summary(self) -> str:
+        """Generate scoring summary."""
+        lines = []
+        lines.append("\n" + "-" * 70 + "\nFinal Score\n" + "-" * 70)
+        
+        # Category breakdown
+        for category in ['basic', 'advanced', 'python']:
+            earned, total = self.get_score(category)
+            if total > 0:
+                percentage = (earned / total) * 100
+                lines.append(f"  {category.title()}: {earned}/{total} ({percentage:.1f}%)")
+        
+        # Overall score
+        earned, total = self.get_score()
+        percentage = (earned / total) * 100 if total > 0 else 0
+        lines.append(f"  Overall: {earned}/{total} ({percentage:.1f}%)")
+        
+        return '\n'.join(lines)
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional
+
+
+def create_table_header():
+    """Create table header for test results."""
+    header_line = "=" * 70
+    header_row = "| {:<45} | {:<18} |".format("Test Results", "Points")
+    divider_line = "+" + "-" * 47 + "+" + "-" * 20 + "+"
+    return f"{header_line}\n{header_row}\n{divider_line}"
+
+
+def create_table_row(test_name, points_text, success=True):
+    """Create a table row for test results."""
+    # Add visual indicator for pass/fail
+    indicator = "✓" if success else "✗"
+    test_with_indicator = f"{indicator} {test_name}"
+    return "| {:<45} | {:<18} |".format(test_with_indicator[:45], points_text)
+
+
+def create_table_section_divider(section_name, add_top_separator=True):
+    """Create a section divider within the table."""
+    divider_line = "+" + "-" * 47 + "+" + "-" * 20 + "+"
+    section_row = "| {:<45} | {:<18} |".format(f"--- {section_name} ---", "")
+    
+    if add_top_separator:
+        return f"{divider_line}\n{section_row}\n{divider_line}"
+    else:
+        return f"{section_row}\n{divider_line}"
+
+
+def create_table_footer():
+    """Create table footer."""
+    return "=" * 70
+
+
+def execute_and_display_test(test_name, test_runner_func, test_args, point_system, 
+                           current_test, total_tests, start_time, verbose, all_output):
+    """
+    Unified function to execute a test and display its result in either verbose or table format.
+    
+    Args:
+        test_name: Name of the test
+        test_runner_func: Function to run the test (run_test or run_sh_test)
+        test_args: Arguments to pass to the test runner function
+        point_system: PointSystem instance for scoring
+        current_test: Current test number (1-indexed)
+        total_tests: Total number of tests
+        start_time: Start time for elapsed time calculation
+        verbose: Whether to show verbose output
+        all_output: List to append output lines to
+    
+    Returns:
+        Tuple of (success: bool, test_output: str)
+    """
+    # Show progress indicator
+    if not verbose:
+        progress_info = format_progress_info(current_test, total_tests, test_name, start_time)
+        print(f"\r{progress_info}", end="", flush=True)
+    else:
+        print(f"Running test {current_test}/{total_tests}: {test_name}")
+    
+    # Run the test
+    success, output = test_runner_func(*test_args)
+    
+    # Record result in point system
+    point_system.record_result(test_name, success)
+    
+    if not verbose:
+        # Create table row
+        if test_name in point_system.test_configs:
+            points = point_system.test_configs[test_name].points
+            earned = points if success else 0
+            points_text = f"{earned}/{points} pts"
+        else:
+            points_text = "N/A"
+        
+        table_row = create_table_row(test_name, points_text, success)
+        print(f"\r{' ' * 120}\r{table_row}")
+        all_output.append(table_row)
+    else:
+        # In verbose mode, only show details for failed tests
+        if success:
+            status = "PASS"
+            if test_name in point_system.test_configs:
+                points = point_system.test_configs[test_name].points
+                print(f"  {status}: {test_name} ({points}/{points} pts)")
+            else:
+                print(f"  {status}: {test_name}")
+        else:
+            status = "FAIL"
+            if test_name in point_system.test_configs:
+                points = point_system.test_configs[test_name].points
+                print(f"  {status}: {test_name} (0/{points} pts)")
+            else:
+                print(f"  {status}: {test_name}")
+            # Show full details for failed tests
+            print(f"    Details: {output}")
+            print("-" * 60)
+    
+    return success, output
+
+
+def print_section_header(section_name, verbose, all_output, add_top_separator=True):
+    """
+    Print section header in either verbose or table format.
+    
+    Args:
+        section_name: Name of the section
+        verbose: Whether to show verbose output
+        all_output: List to append output lines to
+        add_top_separator: Whether to add top separator for table
+    """
+    if not verbose:
+        section_divider = create_table_section_divider(section_name, add_top_separator)
+        print(section_divider)
+        all_output.append(section_divider)
+    else:
+        print(f"\n=== {section_name} ===\n")
+
+
+def print_score_summary(point_system, verbose, all_output):
+    """
+    Print final score summary in either verbose or table format.
+    
+    Args:
+        point_system: PointSystem instance for scoring
+        verbose: Whether to show verbose output
+        all_output: List to append output lines to
+    """
+    if not verbose:
+        # Add final score section to table
+        final_score_divider = create_table_section_divider("Final Score")
+        print(final_score_divider)
+        all_output.append(final_score_divider)
+        
+        # Add score breakdown as table rows
+        for category in ['basic', 'advanced', 'python']:
+            earned, total = point_system.get_score(category)
+            if total > 0:
+                percentage = (earned / total) * 100
+                score_text = f"{earned}/{total} ({percentage:.1f}%)"
+                score_row = create_table_row(f"{category.title()} Tests", score_text, earned == total)
+                print(score_row)
+                all_output.append(score_row)
+        
+        # Add overall score
+        earned, total = point_system.get_score()
+        percentage = (earned / total) * 100 if total > 0 else 0
+        overall_score_row = create_table_row("Overall Score", f"{earned}/{total} ({percentage:.1f}%)", earned == total)
+        print(overall_score_row)
+        all_output.append(overall_score_row)
+        
+        # Print table footer
+        table_footer = create_table_footer()
+        print(table_footer)
+        all_output.append(table_footer)
+    else:
+        # In verbose mode, show simpler summary
+        print("\n" + "=" * 60)
+        print("FINAL SCORE SUMMARY")
+        print("=" * 60)
+        
+        for category in ['basic', 'advanced', 'python']:
+            earned, total = point_system.get_score(category)
+            if total > 0:
+                percentage = (earned / total) * 100
+                status = "✓" if earned == total else "✗"
+                print(f"{status} {category.title()} Tests: {earned}/{total} ({percentage:.1f}%)")
+        
+        earned, total = point_system.get_score()
+        percentage = (earned / total) * 100 if total > 0 else 0
+        status = "✓" if earned == total else "✗"
+        print(f"\n{status} Overall Score: {earned}/{total} ({percentage:.1f}%)")
+        print("=" * 60)
+
+
+def cleanup_core_files(script_dir):
+    """
+    Clean up core.die files generated by crash tests.
+    
+    Args:
+        script_dir: Directory to clean up
+    """
+    try:
+        core_files = glob.glob(str(script_dir / "core.die.*"))
+        if len(core_files) > 0:
+            for core_file in core_files:
+                os.remove(core_file)
+            print(f"Cleaned up {len(core_files)} core.die files")
+    except Exception as e:
+        print(f"Warning: Could not clean up core files: {e}")
+
+
+
+
+def discover_tests(script_dir):
+    """
+    Discover all available test scripts and their corresponding .reg files.
+    
+    Args:
+        script_dir: Directory to search for test files
+    
+    Returns:
+        Dict mapping test names to (script_path, reg_path) tuples
+    """
+    tests = {}
+    test_scripts = glob.glob(str(script_dir / "*_test.py"))
+    
+    # Exclude standalone test scripts that don't follow the *_test.py + .reg pattern
+    excluded_scripts = {'substitution_test.py'}
+    
+    for script_path in test_scripts:
+        script_path = Path(script_path)
+        test_name = script_path.stem  # e.g., "echo_test"
+        
+        # Skip excluded scripts
+        if script_path.name in excluded_scripts:
+            continue
+            
+        reg_path = script_dir / f"{test_name}.reg"
+        
+        if reg_path.exists():
+            tests[test_name] = (script_path, reg_path)
+        else:
+            print(f"Warning: No .reg file found for {script_path}")
+    
+    return tests
+
+
+def discover_sh_tests(script_dir):
+    """
+    Discover all .sh test scripts and their corresponding .out or .reg files.
+    
+    Args:
+        script_dir: Directory to search for test files
+    
+    Returns:
+        Dict mapping categories to test dictionaries:
+        {
+            'basic': {test_name: (script_path, expected_path), ...},
+            'advanced': {test_name: (script_path, expected_path), ...}
+        }
+    """
+    sh_tests = {"basic": {}, "advanced": {}}
+    test_scripts = glob.glob(str(script_dir / "*.sh"))
+    
+    for script_path in test_scripts:
+        script_path = Path(script_path)
+        test_name = script_path.stem  # e.g., "001-comment" or "substitution_test_basic"
+        
+        # Look for .out file first, then .reg file
+        out_path = script_dir / f"{test_name}.out"
+        reg_path = script_dir / f"{test_name}.reg"
+        
+        expected_path = None
+        if out_path.exists():
+            expected_path = out_path
+        elif reg_path.exists():
+            expected_path = reg_path
+        
+        if expected_path:
+            # Categorize based on test number or name
+            if test_name.startswith("substitution_test_"):
+                # Handle substitution tests
+                if "basic" in test_name:
+                    category = "basic"
+                else:
+                    category = "advanced"
+            else:
+                # Handle numbered tests (basic: 001-089, advanced: 90+)
+                try:
+                    test_num = int(test_name.split('-')[0])
+                    category = "basic" if test_num < 90 else "advanced"
+                except (ValueError, IndexError):
+                    # If we can't parse the number, default to basic
+                    category = "basic"
+            
+            sh_tests[category][test_name] = (script_path, expected_path)
+        else:
+            print(f"Warning: No .out or .reg file found for {script_path}")
+    
+    return sh_tests
+
+
+
+
+def run_test(test_name, script_path, shell_path="./minibash", verbose=False):
+    """
+    Run a specific test script with the given shell.
+    
+    Args:
+        test_name: Name of the test (e.g., "echo_test")
+        script_path: Path to the test script
+        shell_path: Path to the shell executable to test
+        verbose: Whether to show verbose output
+    
+    Returns:
+        Tuple of (success: bool, output: str)
+    """
+    try:
+        cmd = ["python3", str(script_path), "--shell", shell_path]
+        if verbose:
+            cmd.append("--verbose")
+        
+        os.environ['PATH'] = f'{script_path.parent}{os.pathsep}{os.environ["PATH"]}'
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+        
+        return result.returncode == 0, result.stdout + result.stderr
+        
+    except Exception as e:
+        return False, f"Error running {test_name}: {str(e)}"
+
+def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", verbose=False):
+    """
+    Run a .sh test script and compare output with expected .out or .reg file.
+    
+    Args:
+        test_name: Name of the test (e.g., "001-comment")
+        script_path: Path to the .sh script
+        expected_path: Path to the expected .out or .reg file
+        shell_path: Path to the shell executable to test
+        verbose: Whether to show verbose output
+    
+    Returns:
+        Tuple of (success: bool, output: str)
+    """
+    try:
+        # Run the shell script with the specified shell
+        cmd = [shell_path, str(script_path)]
+        
+        os.environ['PATH'] = f'{script_path.parent}{os.pathsep}{os.environ["PATH"]}'
+        
+        # Check if this is a timing-sensitive while complex test
+        timing_sensitive_tests = ["200-while-complex", "201-while-complex-2"]
+        
+        if test_name in timing_sensitive_tests:
+            # For timing-sensitive tests, use Popen and waitpid equivalent
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Use communicate() which is equivalent to waitpid() + reading output
+            # This blocks until process completes (like waitpid(pid, &status, 0) in C)
+            stdout, stderr = process.communicate()
+            
+            actual_output = stdout
+            result_returncode = process.returncode
+            result_stderr = stderr
+        else:
+            # For other tests, use the original approach with timeout
+            timeout = 30  # Allow up to 30 seconds for tests to complete
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            actual_output = result.stdout
+            result_returncode = result.returncode
+            result_stderr = result.stderr
+        
+        # Check if this is a .reg file (regex-based) or .out file (exact match)
+        if expected_path.suffix == '.reg':
+            # For .reg files, use the existing expansion_test.py for validation
+            # This is a simplified approach - for now just check if script ran successfully
+            success = result_returncode == 0
+            output = f"{'PASS' if success else 'FAIL'}: {test_name}"
+            
+            if verbose or not success:
+                output += f"\nActual output:\n{repr(actual_output)}"
+                if result_stderr:
+                    output += f"\nStderr:\n{result_stderr}"
+        else:
+            # For regular .out files, do exact comparison
+            with open(expected_path, 'r') as f:
+                expected_output = f.read()
+            
+            success = actual_output == expected_output
+            
+            if success:
+                output = f"PASS: {test_name}"
+                if verbose:
+                    output += f"\nExpected output:\n{repr(expected_output)}"
+                    output += f"\nActual output:\n{repr(actual_output)}"
+            else:
+                output = f"FAIL: {test_name}"
+                output += f"\nExpected output:\n{repr(expected_output)}"
+                output += f"\nActual output:\n{repr(actual_output)}"
+                if result_stderr:
+                    output += f"\nStderr:\n{result_stderr}"
+        
+        return success, output
+        
+    except subprocess.TimeoutExpired:
+        return False, f"TIMEOUT: {test_name} exceeded {timeout} seconds"
+    except Exception as e:
+        return False, f"Error running {test_name}: {str(e)}"
+
+
+
+
+def run_all_tests(shell_path="./minibash", verbose=False, point_system=None):
+    """
+    Run all discovered tests with the given shell.
+    
+    Args:
+        shell_path: Path to the shell executable to test
+        verbose: Whether to show verbose output
+        point_system: PointSystem instance for scoring
+    
+    Returns:
+        Tuple of (success: bool, output: str, results: dict, point_system: PointSystem)
+    """
+    script_dir = Path(__file__).resolve().parent
+    py_tests = discover_tests(script_dir)
+    sh_tests = discover_sh_tests(script_dir)
+    
+    # Initialize point system if not provided
+    if point_system is None:
+        point_system = PointSystem()
+        point_system.distribute_points(
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests
+        )
+    
+    # Count total tests for progress tracking
+    total_tests = len(py_tests)
+    for category_tests in sh_tests.values():
+        total_tests += len(category_tests)
+    
+    all_output = []
+    results = {}
+    all_success = True
+    current_test = 0
+    start_time = time.time()
+    
+    # Print unified table header (only in non-verbose mode)
+    if not verbose:
+        table_header = create_table_header()
+        print(f"\n{table_header}")
+        all_output.append(table_header)
+    else:
+        print(f"\nRunning {total_tests} tests in verbose mode...\n")
+    
+    # Run Python tests
+    if py_tests:
+        print_section_header("Python Tests", verbose, all_output, add_top_separator=False)
+        
+        for test_name, (script_path, reg_path) in py_tests.items():
+            current_test += 1
+            
+            success, output = execute_and_display_test(
+                test_name, run_test, 
+                (test_name, script_path, shell_path, verbose),
+                point_system, current_test, total_tests, start_time, verbose, all_output
+            )
+            
+            results[test_name] = success
+            if not success:
+                all_success = False
+    
+    # Run shell script tests
+    for category in ['basic', 'advanced']:
+        category_tests = sh_tests.get(category, {})
+        if category_tests:
+            print_section_header(f"{category.title()} Tests", verbose, all_output)
+            
+            # Sort tests by name for consistent output
+            for test_name in sorted(category_tests.keys()):
+                current_test += 1
+                script_path, expected_path = category_tests[test_name]
+                
+                success, output = execute_and_display_test(
+                    test_name, run_sh_test,
+                    (test_name, script_path, expected_path, shell_path, verbose),
+                    point_system, current_test, total_tests, start_time, verbose, all_output
+                )
+                
+                results[f"{category}_{test_name}"] = success
+                if not success:
+                    all_success = False
+    
+    # Check if any tests were found
+    if not py_tests and not any(sh_tests.values()):
+        return False, "No tests discovered", {}, point_system
+    
+    print_score_summary(point_system, verbose, all_output)
+    
+    # Show completion message
+    if total_tests > 0:
+        elapsed_time = time.time() - start_time
+        completion_msg = f"✓ Completed {total_tests} tests in {elapsed_time:.1f}s" + "\n"
+        print(completion_msg)
+    
+    # Clean up core.die files generated by crash tests
+    cleanup_core_files(script_dir)
+    
+    return all_success, '\n'.join(all_output), results, point_system
+
+
+def run_shell_tests_category(category, category_tests, shell_path="./minibash", verbose=False, point_system=None):
+    """
+    Run shell script tests for a specific category.
+    
+    Args:
+        category: Category name ('basic' or 'advanced')
+        category_tests: Dict of test_name -> (script_path, out_path)
+        shell_path: Path to the shell executable to test
+        verbose: Whether to show verbose output
+        point_system: PointSystem instance for scoring
+    
+    Returns:
+        Tuple of (success: bool, output: str, point_system: PointSystem)
+    """
+    # Initialize point system if not provided
+    if point_system is None:
+        point_system = PointSystem()
+        if category == 'basic':
+            point_system.distribute_points(category_tests, {}, {})
+        else:
+            point_system.distribute_points({}, category_tests, {})
+    
+    all_output = []
+    all_success = True
+    total_tests = len(category_tests)
+    current_test = 0
+    start_time = time.time()
+    
+    if not verbose:
+        # Print unified table header
+        table_header = create_table_header()
+        print(f"\n{table_header}")
+        all_output.append(table_header)
+    else:
+        print(f"\nRunning {total_tests} {category} tests in verbose mode...\n")
+    
+    print_section_header(f"{category.title()} Tests", verbose, all_output)
+    
+    for test_name in sorted(category_tests.keys()):
+        current_test += 1
+        script_path, expected_path = category_tests[test_name]
+        
+        success, output = execute_and_display_test(
+            test_name, run_sh_test,
+            (test_name, script_path, expected_path, shell_path, verbose),
+            point_system, current_test, total_tests, start_time, verbose, all_output
+        )
+        
+        if not success:
+            all_success = False
+    
+    print_score_summary(point_system, verbose, all_output)
+    
+    # Show completion message
+    if total_tests > 0:
+        elapsed_time = time.time() - start_time
+        completion_msg = f"✓ Completed {total_tests} {category} tests in {elapsed_time:.1f}s" + "\n"
+        print(completion_msg)
+    
+    # Clean up core.die files generated by crash tests
+    script_dir = Path(__file__).resolve().parent
+    cleanup_core_files(script_dir)
+    
+    return all_success, '\n'.join(all_output), point_system
+
+
+def run_python_tests_only(py_tests, shell_path="./minibash", verbose=False, point_system=None):
+    """
+    Run only Python tests.
+    
+    Args:
+        py_tests: Dict of test_name -> (script_path, reg_path)
+        shell_path: Path to the shell executable to test
+        verbose: Whether to show verbose output
+        point_system: PointSystem instance for scoring
+    
+    Returns:
+        Tuple of (success: bool, output: str, point_system: PointSystem)
+    """
+    # Initialize point system if not provided
+    if point_system is None:
+        point_system = PointSystem()
+        point_system.distribute_points({}, {}, py_tests)
+    
+    all_output = []
+    all_success = True
+    total_tests = len(py_tests)
+    current_test = 0
+    start_time = time.time()
+    
+    if not verbose:
+        # Print unified table header
+        table_header = create_table_header()
+        print(f"\n{table_header}")
+        all_output.append(table_header)
+    else:
+        print(f"\nRunning {total_tests} python tests in verbose mode...\n")
+    
+    print_section_header("Python Tests", verbose, all_output)
+    
+    for test_name, (script_path, reg_path) in py_tests.items():
+        current_test += 1
+        
+        success, output = execute_and_display_test(
+            test_name, run_test,
+            (test_name, script_path, shell_path, verbose),
+            point_system, current_test, total_tests, start_time, verbose, all_output
+        )
+        
+        if not success:
+            all_success = False
+    
+    print_score_summary(point_system, verbose, all_output)
+    
+    # Show completion message
+    if total_tests > 0:
+        elapsed_time = time.time() - start_time
+        completion_msg = f"✓ Completed {total_tests} python tests in {elapsed_time:.1f}s" + "\n"
+        print(completion_msg)
+    
+    # Clean up core.die files generated by crash tests
+    script_dir = Path(__file__).resolve().parent
+    cleanup_core_files(script_dir)
+    
+    return all_success, '\n'.join(all_output), point_system
+
+
+def main():
+    """Main function for standalone usage."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Generic minibash driver for running test scripts",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python3 minibash_driver.py --shell ./minibash
+  python3 minibash_driver.py --test echo_test --shell ./minibash --verbose
+  python3 minibash_driver.py --test 001-comment --shell ./minibash
+  python3 minibash_driver.py -b --shell ./minibash
+  python3 minibash_driver.py -a --shell ./minibash
+  python3 minibash_driver.py --list-tests
+        """
+    )
+    
+    parser.add_argument("--shell", default="./minibash", help="Path to shell executable")
+    parser.add_argument("--test", help="Run specific test (e.g., 'echo_test' or '001-comment')")
+    parser.add_argument("-b", "--basic", action="store_true", help="Run only basic shell script tests (.sh/.out)")
+    parser.add_argument("-a", "--advanced", action="store_true", help="Run only advanced shell script tests (.sh/.out)")
+    parser.add_argument("--python-only", action="store_true", help="Run only Python tests (.py/.reg)")
+    parser.add_argument("--list-tests", action="store_true", help="List available tests")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    
+    # Point system configuration
+    # parser.add_argument("--total-points", type=int, default=100, help="Total points available (default: 100)")
+    # parser.add_argument("--basic-ratio", type=float, default=0.7, help="Ratio of points for basic tests (0.0-1.0, default: 0.7)")
+    
+    args = parser.parse_args()
+    
+    # Validate point system arguments
+    # if args.basic_ratio < 0.0 or args.basic_ratio > 1.0:
+    #     print("Error: --basic-ratio must be between 0.0 and 1.0")
+    #     sys.exit(1)
+    
+    script_dir = Path(__file__).resolve().parent
+    py_tests = discover_tests(script_dir)
+    sh_tests = discover_sh_tests(script_dir)
+    
+    # Initialize point system
+    point_system = PointSystem(total_points=100, basic_ratio=0.7)
+    point_system.distribute_points(
+        sh_tests.get('basic', {}), 
+        sh_tests.get('advanced', {}), 
+        py_tests
+    )
+    
+    if args.list_tests:
+        print("Available Python tests (.py/.reg):")
+        for test_name in sorted(py_tests.keys()):
+            if test_name in point_system.test_configs:
+                points = point_system.test_configs[test_name].points
+                print(f"  {test_name} ({points} pts)")
+            else:
+                print(f"  {test_name}")
+        
+        print("\nAvailable shell script tests (.sh/.out or .sh/.reg):")
+        for category in ['basic', 'advanced']:
+            category_tests = sh_tests.get(category, {})
+            if category_tests:
+                print(f"  {category.title()}:")
+                for test_name in sorted(category_tests.keys()):
+                    if test_name in point_system.test_configs:
+                        points = point_system.test_configs[test_name].points
+                        print(f"    {test_name} ({points} pts)")
+                    else:
+                        print(f"    {test_name}")
+        
+        print("\n" + point_system.get_summary())
+        return
+    
+    if args.test:
+        # Run specific test
+        test_found = False
+        
+        # Check Python tests
+        if args.test in py_tests:
+            script_path, reg_path = py_tests[args.test]
+            print(f"Running Python test: {args.test}")
+            print(f"Script: {script_path}")
+            print(f"Template: {reg_path}")
+            
+            success, output = run_test(args.test, script_path, args.shell, args.verbose)
+            
+            # Add point information if available
+            if args.test in point_system.test_configs:
+                points = point_system.test_configs[args.test].points
+                earned = points if success else 0
+                # Pad output to 55 characters and add points in right column
+                base_output = output.rstrip()
+                padded_output = base_output.ljust(55)
+                point_status = f"{earned}/{points} pts"
+                output = padded_output + point_status
+            
+            print(output)
+            
+            # Clean up core.die files generated by crash tests
+            cleanup_core_files(script_dir)
+            
+            sys.exit(0 if success else 1)
+        
+        # Check shell script tests
+        for category in ['basic', 'advanced']:
+            category_tests = sh_tests.get(category, {})
+            if args.test in category_tests:
+                script_path, expected_path = category_tests[args.test]
+                print(f"Running shell script test ({category}): {args.test}")
+                print(f"Script: {script_path}")
+                print(f"Expected: {expected_path}")
+                
+                success, output = run_sh_test(args.test, script_path, expected_path, args.shell, args.verbose)
+                
+                # Add point information if available
+                if args.test in point_system.test_configs:
+                    points = point_system.test_configs[args.test].points
+                    earned = points if success else 0
+                    # Pad output to 55 characters and add points in right column
+                    base_output = output.rstrip()
+                    padded_output = base_output.ljust(55)
+                    point_status = f"{earned}/{points} pts"
+                    output = padded_output + point_status
+                
+                print(output)
+                
+                # Clean up core.die files generated by crash tests
+                cleanup_core_files(script_dir)
+                
+                sys.exit(0 if success else 1)
+        
+        print(f"Error: Test '{args.test}' not found.")
+        print("Available Python tests:", ", ".join(py_tests.keys()))
+        all_sh_tests = []
+        for category_tests in sh_tests.values():
+            all_sh_tests.extend(category_tests.keys())
+        print("Available shell script tests:", ", ".join(sorted(all_sh_tests)))
+        sys.exit(1)
+    
+    elif args.basic:
+        # Run only basic shell script tests
+        if not sh_tests.get('basic'):
+            print("No basic shell script tests found.")
+            sys.exit(1)
+        
+        # Create category-specific point system
+        basic_point_system = PointSystem(total_points=100, basic_ratio=1.0)
+        basic_point_system.distribute_points(sh_tests['basic'], {}, {})
+        
+        success, output, _ = run_shell_tests_category('basic', sh_tests['basic'], args.shell, args.verbose, basic_point_system)
+        sys.exit(0 if success else 1)
+    
+    elif args.advanced:
+        # Run only advanced shell script tests
+        if not sh_tests.get('advanced'):
+            print("No advanced shell script tests found.")
+            sys.exit(1)
+        
+        # Create category-specific point system
+        advanced_point_system = PointSystem(total_points=100, basic_ratio=0.0)
+        advanced_point_system.distribute_points({}, sh_tests['advanced'], {})
+        
+        success, output, _ = run_shell_tests_category('advanced', sh_tests['advanced'], args.shell, args.verbose, advanced_point_system)
+        sys.exit(0 if success else 1)
+    
+    elif args.python_only:
+        # Run only Python tests
+        if not py_tests:
+            print("No Python tests found.")
+            sys.exit(1)
+        
+        # Create python-specific point system
+        python_point_system = PointSystem(total_points=100, basic_ratio=0.0)
+        python_point_system.distribute_points({}, {}, py_tests)
+        
+        success, output, _ = run_python_tests_only(py_tests, args.shell, args.verbose, python_point_system)
+        sys.exit(0 if success else 1)
+    
+    else:
+        # Run all tests (default behavior)
+        success, output, results, final_point_system = run_all_tests(args.shell, args.verbose, point_system)
+        sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,1 +1,1 @@
-My pid is $re \d+$
+My pid is $re: \d+$

@@ -631,15 +631,45 @@ def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", 
         
         # Check if this is a .reg file (regex-based) or .out file (exact match)
         if expected_path.suffix == '.reg':
-            # For .reg files, use the existing expansion_test.py for validation
-            # This is a simplified approach - for now just check if script ran successfully
-            success = result_returncode == 0
-            output = f"{'PASS' if success else 'FAIL'}: {test_name}"
-            
-            if verbose or not success:
-                output += f"\nActual output:\n{repr(actual_output)}"
-                if result_stderr:
-                    output += f"\nStderr:\n{result_stderr}"
+            # For .reg files, use regex validation from regex_driver
+            try:
+                # Import the regex validation function
+                import sys
+                sys.path.insert(0, str(script_path.parent))
+                from regex_driver import compare_output_with_template
+                
+                # Create a temporary file with the actual output for regex validation
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as tmp_file:
+                    tmp_file.write(actual_output)
+                    tmp_file_path = tmp_file.name
+                
+                try:
+                    # Use the regex driver to compare output with template
+                    with open(tmp_file_path, 'r', encoding='utf-8') as actual_file:
+                        success = compare_output_with_template(str(expected_path), actual_file, verbose=verbose)
+                    
+                    output = f"{'PASS' if success else 'FAIL'}: {test_name}"
+                    
+                    if verbose or not success:
+                        output += f"\nActual output:\n{repr(actual_output)}"
+                        if result_stderr:
+                            output += f"\nStderr:\n{result_stderr}"
+                            
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.unlink(tmp_file_path)
+                    except OSError:
+                        pass
+                        
+            except Exception as e:
+                success = False
+                output = f"FAIL: {test_name} (regex validation error: {str(e)})"
+                if verbose:
+                    output += f"\nActual output:\n{repr(actual_output)}"
+                    if result_stderr:
+                        output += f"\nStderr:\n{result_stderr}"
         else:
             # For .out files, check if this is a timing-sensitive test
             timing_sensitive_tests = ["200-while-complex", "201-while-complex-2"]

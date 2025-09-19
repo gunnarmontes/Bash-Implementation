@@ -295,8 +295,7 @@ def create_table_header():
     """Create table header for test results."""
     header_line = "=" * 70
     header_row = "| {:<45} | {:<18} |".format("Test Results", "Points")
-    divider_line = "+" + "-" * 47 + "+" + "-" * 20 + "+"
-    return f"{header_line}\n{header_row}\n{divider_line}"
+    return f"{header_line}\n{header_row}"
 
 
 def create_table_row(test_name, points_text, success=True, valgrind_failed=False):

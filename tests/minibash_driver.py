@@ -18,6 +18,11 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 
+# Grading constants
+DEFAULT_TOTAL_POINTS = 100
+DEFAULT_BASIC_RATIO = 0.7
+VALGRIND_POINTS = 15
+
 
 def create_progress_bar(current: int, total: int, width: int = 40) -> str:
     """
@@ -87,7 +92,7 @@ class TestConfig:
 class PointSystem:
     """Manages point distribution and scoring for tests."""
     
-    def __init__(self, total_points: int = 100, basic_ratio: float = 0.7, valgrind_points: int = 15):
+    def __init__(self, total_points: int = DEFAULT_TOTAL_POINTS, basic_ratio: float = DEFAULT_BASIC_RATIO, valgrind_points: int = VALGRIND_POINTS):
         """Initialize point system.
         
         Args:
@@ -112,6 +117,8 @@ class PointSystem:
         self.valgrind_results = {}
         # Track whether valgrind is being used
         self.valgrind_enabled = False
+        # Track which tests failed valgrind (but may have passed functionally)
+        self.valgrind_failures = set()
     
     def add_test_config(self, config: TestConfig):
         """Add a test configuration."""
@@ -201,11 +208,19 @@ class PointSystem:
     def record_valgrind_result(self, test_name: str, no_memory_leaks: bool):
         """Record valgrind result (separate from test correctness)."""
         self.valgrind_results[test_name] = no_memory_leaks
+        if not no_memory_leaks:
+            self.valgrind_failures.add(test_name)
+    
+    def test_failed_valgrind(self, test_name: str) -> bool:
+        """Check if a test failed valgrind (but may have passed functionally)."""
+        return test_name in self.valgrind_failures
     
     def evaluate_valgrind_results(self):
         """Evaluate valgrind tests and record overall valgrind score."""
         # Valgrind passes only if ALL valgrind tests have no memory leaks
+        # print(f"DEBUG: Valgrind results: {self.valgrind_results}")
         all_valgrind_passed = all(self.valgrind_results.values()) if self.valgrind_results else False
+        # print(f"DEBUG: All valgrind passed: {all_valgrind_passed}")
         self.record_result("valgrind_memory_check", all_valgrind_passed)
     
     def get_score(self, category: str = None) -> Tuple[int, int]:
@@ -222,6 +237,11 @@ class PointSystem:
         
         for test_name, config in self.test_configs.items():
             if category is None or config.category == category:
+                # For valgrind tests, only include in scoring if valgrind was actually run
+                if config.category == 'valgrind' and test_name not in self.results:
+                    # Valgrind test exists but was never run - don't count it
+                    continue
+                
                 total += config.points
                 if self.results.get(test_name, False):
                     earned += config.points
@@ -262,11 +282,16 @@ def create_table_header():
     return f"{header_line}\n{header_row}\n{divider_line}"
 
 
-def create_table_row(test_name, points_text, success=True):
+def create_table_row(test_name, points_text, success=True, valgrind_failed=False):
     """Create a table row for test results."""
     # Add visual indicator for pass/fail
     indicator = "✓" if success else "✗"
-    test_with_indicator = f"{indicator} {test_name}"
+    # Add valgrind failure indicator
+    if valgrind_failed and success:
+        indicator = "⚠"  # Warning symbol for tests that pass but fail valgrind
+        test_with_indicator = f"{indicator} {test_name} (valgrind failed)"
+    else:
+        test_with_indicator = f"{indicator} {test_name}"
     return "| {:<45} | {:<18} |".format(test_with_indicator[:45], points_text)
 
 
@@ -287,7 +312,7 @@ def create_table_footer():
 
 
 def execute_and_display_test(test_name, test_runner_func, test_args, point_system, 
-                           current_test, total_tests, start_time, verbose, all_output, valgrind=False):
+                           current_test, total_tests, start_time, verbose, all_output, valgrind=False, valgrind_failed=False):
     """
     Unified function to execute a test and display its result in either verbose or table format.
     
@@ -328,9 +353,14 @@ def execute_and_display_test(test_name, test_runner_func, test_args, point_syste
         else:
             points_text = "N/A"
         
-        table_row = create_table_row(test_name, points_text, success)
+        table_row = create_table_row(test_name, points_text, success, valgrind_failed)
         print(f"\r{' ' * 120}\r{table_row}")
         all_output.append(table_row)
+        
+        # Show progress indicator between tests if not the last test
+        if current_test < total_tests:
+            next_progress_info = format_progress_info(current_test, total_tests, None, start_time)
+            print(f"\r{next_progress_info}", end="", flush=True)
     else:
         # In verbose mode, only show details for failed tests
         if success:
@@ -365,6 +395,8 @@ def print_section_header(section_name, verbose, all_output, add_top_separator=Tr
         add_top_separator: Whether to add top separator for table
     """
     if not verbose:
+        # Clear any existing progress bar before printing section divider
+        print(f"\r{' ' * 120}\r", end="")
         section_divider = create_table_section_divider(section_name, add_top_separator)
         print(section_divider)
         all_output.append(section_divider)
@@ -382,6 +414,8 @@ def print_score_summary(point_system, verbose, all_output):
         all_output: List to append output lines to
     """
     if not verbose:
+        # Clear any existing progress bar before printing final score
+        print(f"\r{' ' * 120}\r", end="")
         # Add final score section to table
         final_score_divider = create_table_section_divider("Final Score")
         print(final_score_divider)
@@ -585,6 +619,36 @@ def run_test(test_name, script_path, shell_path="./minibash", verbose=False, val
         return False, f"Error running {test_name}: {str(e)}"
 
 
+def run_valgrind_on_shell(script_path, shell_path="./minibash"):
+    """
+    Run valgrind on a shell script and return the raw valgrind output.
+    
+    Args:
+        script_path: Path to the .sh script
+        shell_path: Path to the shell executable to test
+    
+    Returns:
+        Tuple of (success: bool, valgrind_output: str)
+    """
+    try:
+        cmd = ["valgrind", "--leak-check=full", "--error-exitcode=1", shell_path, str(script_path)]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Return success and the stderr output which contains valgrind info
+        return result.returncode == 0, result.stderr
+        
+    except subprocess.TimeoutExpired:
+        return False, "TIMEOUT: Valgrind check exceeded 30 seconds"
+    except Exception as e:
+        return False, f"Error running valgrind: {str(e)}"
+
+
 def check_valgrind_for_leaks(output):
     """
     Check valgrind output for memory leaks.
@@ -595,28 +659,30 @@ def check_valgrind_for_leaks(output):
     Returns:
         bool: True if no memory leaks detected, False if leaks found
     """
-    # Look for valgrind's leak summary
     lines = output.split('\n')
+    found_valgrind = False
+    
     for line in lines:
         line = line.strip()
-        # Check for "All heap blocks were freed -- no leaks are possible"
+        
+        # Check if this is valgrind output
+        if "Memcheck, a memory error detector" in line:
+            found_valgrind = True
+        
+        # Check for clean exit - no leaks possible
         if "All heap blocks were freed -- no leaks are possible" in line:
             return True
-        # Check for definite/possible leak indicators
-        if "definitely lost:" in line and not line.endswith("0 bytes in 0 blocks"):
+        
+        # Check for any actual leaks (non-zero bytes lost)
+        if "definitely lost:" in line and not "0 bytes" in line:
             return False
-        if "possibly lost:" in line and not line.endswith("0 bytes in 0 blocks"):
-            return False
-        if "still reachable:" in line and not line.endswith("0 bytes in 0 blocks"):
-            # Still reachable might be acceptable, but let's be strict for now
+        
+        if "possibly lost:" in line and not "0 bytes" in line:
             return False
     
-    # If we found valgrind output but no explicit "no leaks" message,
-    # check for error summary
-    for line in lines:
-        if "ERROR SUMMARY:" in line:
-            # If valgrind ran and we didn't find leak indicators, assume no leaks
-            return True
+    # If we found valgrind output but no leaks were detected, assume clean
+    if found_valgrind:
+        return True
     
     # If no valgrind output detected, assume it didn't run with valgrind
     return False
@@ -875,7 +941,8 @@ def run_all_tests(shell_path="./minibash", verbose=False, point_system=None, wit
             success, output = execute_and_display_test(
                 test_name, run_test, 
                 (test_name, script_path, shell_path, verbose, False),  # False for valgrind
-                point_system, current_test, total_tests, start_time, verbose, all_output
+                point_system, current_test, total_tests, start_time, verbose, all_output,
+                valgrind=False, valgrind_failed=False
             )
             
             results[test_name] = success
@@ -902,7 +969,8 @@ def run_all_tests(shell_path="./minibash", verbose=False, point_system=None, wit
                 success, output = execute_and_display_test(
                     test_name, run_sh_test,
                     (test_name, script_path, expected_path, shell_path, verbose, False),  # False for valgrind
-                    point_system, current_test, total_tests, start_time, verbose, all_output
+                    point_system, current_test, total_tests, start_time, verbose, all_output,
+                    valgrind=False, valgrind_failed=False
                 )
                 
                 results[f"{category}_{test_name}"] = success
@@ -911,7 +979,7 @@ def run_all_tests(shell_path="./minibash", verbose=False, point_system=None, wit
                 
                 # If with_valgrind is enabled, also run with valgrind for memory leak checking
                 if with_valgrind:
-                    _, valgrind_output = run_sh_test(test_name, script_path, expected_path, shell_path, verbose, True)
+                    _, valgrind_output = run_valgrind_on_shell(script_path, shell_path)
                     no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
                     point_system.record_valgrind_result(test_name, no_memory_leaks)
     
@@ -937,7 +1005,7 @@ def run_all_tests(shell_path="./minibash", verbose=False, point_system=None, wit
     return all_success, '\n'.join(all_output), results, point_system
 
 
-def run_shell_tests_category(category, category_tests, shell_path="./minibash", verbose=False, point_system=None):
+def run_shell_tests_category(category, category_tests, shell_path="./minibash", verbose=False, point_system=None, with_valgrind=False):
     """
     Run shell script tests for a specific category.
     
@@ -982,11 +1050,22 @@ def run_shell_tests_category(category, category_tests, shell_path="./minibash", 
         success, output = execute_and_display_test(
             test_name, run_sh_test,
             (test_name, script_path, expected_path, shell_path, verbose, False),  # False for valgrind
-            point_system, current_test, total_tests, start_time, verbose, all_output
+            point_system, current_test, total_tests, start_time, verbose, all_output,
+            valgrind=False, valgrind_failed=False
         )
         
         if not success:
             all_success = False
+        
+        # If with_valgrind is enabled, also run with valgrind for memory leak checking
+        if with_valgrind:
+            _, valgrind_output = run_valgrind_on_shell(script_path, shell_path)
+            no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
+            point_system.record_valgrind_result(test_name, no_memory_leaks)
+    
+    # Evaluate valgrind results if valgrind was run
+    if with_valgrind:
+        point_system.evaluate_valgrind_results()
     
     print_score_summary(point_system, verbose, all_output)
     
@@ -1043,7 +1122,8 @@ def run_python_tests_only(py_tests, shell_path="./minibash", verbose=False, poin
         success, output = execute_and_display_test(
             test_name, run_test,
             (test_name, script_path, shell_path, verbose, False),  # False for valgrind
-            point_system, current_test, total_tests, start_time, verbose, all_output
+            point_system, current_test, total_tests, start_time, verbose, all_output,
+            valgrind=False, valgrind_failed=False
         )
         
         if not success:
@@ -1107,8 +1187,7 @@ Examples:
     py_tests = discover_tests(script_dir)
     sh_tests = discover_sh_tests(script_dir)
     
-    # Initialize point system (100 base points + 20 valgrind = 120 total when valgrind used)
-    point_system = PointSystem(total_points=100, basic_ratio=0.7, valgrind_points=20)
+    point_system = PointSystem()
     point_system.distribute_points(
         sh_tests.get('basic', {}), 
         sh_tests.get('advanced', {}), 
@@ -1215,10 +1294,14 @@ Examples:
             sys.exit(1)
         
         # Create category-specific point system
-        basic_point_system = PointSystem(total_points=100, basic_ratio=1.0)
+        if args.valgrind:
+            basic_point_system = PointSystem(basic_ratio=1.0)
+            basic_point_system.add_valgrind_test()
+        else:
+            basic_point_system = PointSystem(basic_ratio=1.0)
         basic_point_system.distribute_points(sh_tests['basic'], {}, {})
         
-        success, output, _ = run_shell_tests_category('basic', sh_tests['basic'], args.shell, args.verbose, basic_point_system)
+        success, output, _ = run_shell_tests_category('basic', sh_tests['basic'], args.shell, args.verbose, basic_point_system, args.valgrind)
         sys.exit(0 if success else 1)
     
     elif args.advanced:
@@ -1228,7 +1311,7 @@ Examples:
             sys.exit(1)
         
         # Create category-specific point system
-        advanced_point_system = PointSystem(total_points=100, basic_ratio=0.0)
+        advanced_point_system = PointSystem(basic_ratio=0.0)
         advanced_point_system.distribute_points({}, sh_tests['advanced'], {})
         
         success, output, _ = run_shell_tests_category('advanced', sh_tests['advanced'], args.shell, args.verbose, advanced_point_system)
@@ -1240,11 +1323,7 @@ Examples:
             print("No Python tests found.")
             sys.exit(1)
         
-        # Create python-specific point system
-        python_point_system = PointSystem(total_points=100, basic_ratio=0.0)
-        python_point_system.distribute_points({}, {}, py_tests)
-        
-        success, output, _ = run_python_tests_only(py_tests, args.shell, args.verbose, python_point_system)
+        success, output, _ = run_python_tests_only(py_tests, args.shell, args.verbose)
         sys.exit(0 if success else 1)
     
     else:

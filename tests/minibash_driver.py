@@ -438,22 +438,25 @@ def print_score_summary(point_system, verbose, all_output):
         all_output.append(final_score_divider)
         
         # Add score breakdown as table rows
+        categories_with_scores = []
         for category in ['basic', 'advanced', 'python', 'valgrind']:
             earned, total = point_system.get_score(category)
             if total > 0:
+                categories_with_scores.append(category)
                 percentage = (earned / total) * 100
                 score_text = f"{earned}/{total} ({percentage:.1f}%)"
                 score_row = create_table_row(f"{category.title()} Tests", score_text, earned == total)
                 print(score_row)
                 all_output.append(score_row)
         
-        # Add overall score
-        earned, total = point_system.get_score()
-        percentage = (earned / total) * 100 if total > 0 else 0
-        score_text = f"{earned}/{total} ({percentage:.1f}%)"
-        overall_score_row = create_table_row("Overall Score", score_text, earned == total)
-        print(overall_score_row)
-        all_output.append(overall_score_row)
+        # Add overall score only if multiple categories are present
+        if len(categories_with_scores) > 1:
+            earned, total = point_system.get_score()
+            percentage = (earned / total) * 100 if total > 0 else 0
+            score_text = f"{earned}/{total} ({percentage:.1f}%)"
+            overall_score_row = create_table_row("Overall Score", score_text, earned == total)
+            print(overall_score_row)
+            all_output.append(overall_score_row)
         
         # Print table footer
         table_footer = create_table_footer()
@@ -465,17 +468,21 @@ def print_score_summary(point_system, verbose, all_output):
         print("FINAL SCORE SUMMARY")
         print("=" * 60)
         
+        categories_with_scores = []
         for category in ['basic', 'advanced', 'python', 'valgrind']:
             earned, total = point_system.get_score(category)
             if total > 0:
+                categories_with_scores.append(category)
                 percentage = (earned / total) * 100
                 status = "✓" if earned == total else "✗"
                 print(f"{status} {category.title()} Tests: {earned}/{total} ({percentage:.1f}%)")
         
-        earned, total = point_system.get_score()
-        percentage = (earned / total) * 100 if total > 0 else 0
-        status = "✓" if earned == total else "✗"
-        print(f"\n{status} Overall Score: {earned}/{total} ({percentage:.1f}%)")
+        # Show overall score only if multiple categories are present
+        if len(categories_with_scores) > 1:
+            earned, total = point_system.get_score()
+            percentage = (earned / total) * 100 if total > 0 else 0
+            status = "✓" if earned == total else "✗"
+            print(f"\n{status} Overall Score: {earned}/{total} ({percentage:.1f}%)")
         print("=" * 60)
 
 
@@ -1179,6 +1186,189 @@ def run_python_tests_only(py_tests, shell_path="./minibash", verbose=False, poin
     return all_success, '\n'.join(all_output), point_system
 
 
+def run_three_phase_tests(shell_path="./minibash", verbose=False, with_valgrind=True):
+    """
+    Run tests in three phases:
+    1. Basic tests without valgrind
+    2. Advanced tests without valgrind  
+    3. All tests with valgrind (if with_valgrind=True)
+    
+    Args:
+        shell_path: Path to the shell executable to test
+        verbose: Whether to show verbose output
+        with_valgrind: Whether to run the valgrind phase
+    
+    Returns:
+        Tuple of (overall_success: bool, combined_output: str, final_point_system: PointSystem)
+    """
+    script_dir = Path(__file__).resolve().parent
+    py_tests = discover_tests(script_dir)
+    sh_tests = discover_sh_tests(script_dir)
+    
+    # Initialize overall point system
+    overall_point_system = PointSystem()
+    overall_point_system.distribute_points(
+        sh_tests.get('basic', {}), 
+        sh_tests.get('advanced', {}), 
+        py_tests
+    )
+    if with_valgrind:
+        overall_point_system.add_valgrind_test()
+    
+    all_output = []
+    overall_success = True
+    phase_results = {}
+    
+    print(f"\n{'='*70}")
+    print("MINIBASH TEST SUITE - THREE PHASE EXECUTION")
+    print(f"{'='*70}")
+    
+    # Phase 1: Basic tests without valgrind
+    if sh_tests.get('basic'):
+        print(f"\n{'='*70}")
+        print("PHASE 1: Basic Tests (Functional)")
+        print(f"{'='*70}")
+        
+        basic_point_system = PointSystem(basic_ratio=1.0)
+        basic_point_system.distribute_points(sh_tests['basic'], {}, {})
+        
+        success, output, _ = run_shell_tests_category(
+            'basic', sh_tests['basic'], shell_path, verbose, basic_point_system, False
+        )
+        
+        phase_results['basic_functional'] = success
+        all_output.append(f"Phase 1 - Basic Tests (Functional):\n{output}")
+        if not success:
+            overall_success = False
+        
+        # Record basic test results in overall system
+        for test_name in sh_tests['basic']:
+            overall_point_system.record_result(test_name, basic_point_system.results.get(test_name, False))
+    
+    # Phase 2: Advanced tests without valgrind  
+    if sh_tests.get('advanced'):
+        print(f"\n{'='*70}")
+        print("PHASE 2: Advanced Tests (Functional)")
+        print(f"{'='*70}")
+        
+        advanced_point_system = PointSystem(basic_ratio=0.0)
+        advanced_point_system.distribute_points({}, sh_tests['advanced'], {})
+        
+        success, output, _ = run_shell_tests_category(
+            'advanced', sh_tests['advanced'], shell_path, verbose, advanced_point_system, False
+        )
+        
+        phase_results['advanced_functional'] = success
+        all_output.append(f"Phase 2 - Advanced Tests (Functional):\n{output}")
+        if not success:
+            overall_success = False
+            
+        # Record advanced test results in overall system
+        for test_name in sh_tests['advanced']:
+            overall_point_system.record_result(test_name, advanced_point_system.results.get(test_name, False))
+    
+    # Phase 3: Python tests without valgrind
+    if py_tests:
+        print(f"\n{'='*70}")
+        print("PHASE 2.5: Python Tests (Functional)")
+        print(f"{'='*70}")
+        
+        python_point_system = PointSystem()
+        python_point_system.distribute_points({}, {}, py_tests)
+        
+        success, output, _ = run_python_tests_only(py_tests, shell_path, verbose, python_point_system)
+        
+        phase_results['python_functional'] = success
+        all_output.append(f"Phase 2.5 - Python Tests (Functional):\n{output}")
+        if not success:
+            overall_success = False
+            
+        # Record python test results in overall system
+        for test_name in py_tests:
+            overall_point_system.record_result(test_name, python_point_system.results.get(test_name, False))
+    
+    # Phase 3: All tests with valgrind (if enabled)
+    if with_valgrind:
+        print(f"\n{'='*70}")
+        print("PHASE 3: Memory Safety Tests (Valgrind)")
+        print(f"{'='*70}")
+        
+        valgrind_point_system = PointSystem()
+        valgrind_point_system.distribute_points(
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests
+        )
+        valgrind_point_system.add_valgrind_test()
+        
+        success, output, results, _ = run_all_tests(shell_path, verbose, valgrind_point_system, True)
+        
+        phase_results['valgrind'] = success
+        all_output.append(f"Phase 3 - Memory Safety Tests (Valgrind):\n{output}")
+        
+        # Record valgrind results in overall system
+        for test_name, valgrind_result in valgrind_point_system.valgrind_results.items():
+            overall_point_system.record_valgrind_result(test_name, valgrind_result)
+        
+        # Evaluate valgrind results
+        overall_point_system.evaluate_valgrind_results()
+    else:
+        print(f"\n{'='*70}")
+        print("PHASE 3: Memory Safety Tests (Valgrind) - SKIPPED")
+        print(f"{'='*70}")
+        print("Valgrind testing skipped (--no-valgrind flag used)")
+        all_output.append("Phase 3 - Memory Safety Tests (Valgrind): SKIPPED")
+    
+    # Final summary
+    print(f"\n{'='*70}")
+    print("FINAL SUMMARY")
+    print(f"{'='*70}")
+    
+    # Print phase results
+    print("Phase Results:")
+    if 'basic_functional' in phase_results:
+        status = "✓ PASS" if phase_results['basic_functional'] else "✗ FAIL"
+        print(f"  Basic Tests (Functional): {status}")
+    
+    if 'advanced_functional' in phase_results:
+        status = "✓ PASS" if phase_results['advanced_functional'] else "✗ FAIL"
+        print(f"  Advanced Tests (Functional): {status}")
+        
+    if 'python_functional' in phase_results:
+        status = "✓ PASS" if phase_results['python_functional'] else "✗ FAIL"
+        print(f"  Python Tests (Functional): {status}")
+    
+    if with_valgrind:
+        if 'valgrind' in phase_results:
+            valgrind_earned, valgrind_total = overall_point_system.get_score('valgrind')
+            if valgrind_total > 0:
+                percentage = (valgrind_earned / valgrind_total) * 100
+                print(f"  Memory Safety (Valgrind): {valgrind_earned}/{valgrind_total} ({percentage:.1f}%)")
+            else:
+                print(f"  Memory Safety (Valgrind): No tests run")
+    else:
+        print("  Memory Safety (Valgrind): NOT TESTED")
+    
+    # Print overall score
+    print("\nOverall Score:")
+    for category in ['basic', 'advanced', 'python', 'valgrind']:
+        earned, total = overall_point_system.get_score(category)
+        if total > 0:
+            percentage = (earned / total) * 100
+            print(f"  {category.title()}: {earned}/{total} ({percentage:.1f}%)")
+    
+    earned, total = overall_point_system.get_score()
+    percentage = (earned / total) * 100 if total > 0 else 0
+    print(f"  TOTAL: {earned}/{total} ({percentage:.1f}%)")
+    
+    print(f"{'='*70}")
+    
+    # Clean up core.die files generated by crash tests
+    cleanup_core_files(script_dir)
+    
+    return overall_success, '\n'.join(all_output), overall_point_system
+
+
 def main():
     """Main function for standalone usage."""
     import argparse
@@ -1188,12 +1378,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 minibash_driver.py --shell ./minibash
+  python3 minibash_driver.py --shell ./minibash              # Default: 3-phase execution (basic, advanced, valgrind)
+  python3 minibash_driver.py --shell ./minibash --no-valgrind # Skip valgrind phase
   python3 minibash_driver.py --test echo_test --shell ./minibash --verbose
   python3 minibash_driver.py --test 001-comment --shell ./minibash
-  python3 minibash_driver.py -b --shell ./minibash
-  python3 minibash_driver.py -a --shell ./minibash
-  python3 minibash_driver.py --valgrind --shell ./minibash
+  python3 minibash_driver.py -b --shell ./minibash           # Only basic tests
+  python3 minibash_driver.py -a --shell ./minibash           # Only advanced tests
+  python3 minibash_driver.py --valgrind --shell ./minibash   # All tests with valgrind (legacy mode)
   python3 minibash_driver.py --list-tests
         """
     )
@@ -1204,6 +1395,7 @@ Examples:
     parser.add_argument("-a", "--advanced", action="store_true", help="Run only advanced shell script tests (.sh/.out)")
     parser.add_argument("--python-only", action="store_true", help="Run only Python tests (.py/.reg)")
     parser.add_argument("--valgrind", action="store_true", help="Run all tests with valgrind memory leak checking")
+    parser.add_argument("--no-valgrind", action="store_true", help="Skip valgrind testing in default mode")
     parser.add_argument("--list-tests", action="store_true", help="List available tests")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     
@@ -1212,6 +1404,11 @@ Examples:
     # parser.add_argument("--basic-ratio", type=float, default=0.7, help="Ratio of points for basic tests (0.0-1.0, default: 0.7)")
     
     args = parser.parse_args()
+    
+    # Validate mutually exclusive arguments
+    if args.valgrind and args.no_valgrind:
+        print("Error: --valgrind and --no-valgrind are mutually exclusive")
+        sys.exit(1)
     
     # Validate point system arguments
     # if args.basic_ratio < 0.0 or args.basic_ratio > 1.0:
@@ -1373,8 +1570,15 @@ Examples:
         sys.exit(0 if success else 1)
     
     else:
-        # Run all tests (default behavior, with optional valgrind)
-        success, output, results, final_point_system = run_all_tests(args.shell, args.verbose, point_system, args.valgrind)
+        # Run all tests (default behavior: three-phase execution)
+        # Determine whether to run valgrind based on flags
+        run_valgrind = not args.no_valgrind and not args.valgrind
+        if args.valgrind:
+            # If --valgrind is specified, run old behavior for compatibility
+            success, output, results, final_point_system = run_all_tests(args.shell, args.verbose, point_system, True)
+        else:
+            # New default behavior: three-phase execution
+            success, output, final_point_system = run_three_phase_tests(args.shell, args.verbose, run_valgrind)
         sys.exit(0 if success else 1)
 
 

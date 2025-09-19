@@ -218,9 +218,14 @@ class PointSystem:
     def evaluate_valgrind_results(self):
         """Evaluate valgrind tests and record overall valgrind score."""
         # Valgrind passes only if ALL valgrind tests have no memory leaks
-        # print(f"DEBUG: Valgrind results: {self.valgrind_results}")
+        #print(f"DEBUG: Valgrind results: {self.valgrind_results}")
         all_valgrind_passed = all(self.valgrind_results.values()) if self.valgrind_results else False
-        # print(f"DEBUG: All valgrind passed: {all_valgrind_passed}")
+        #print(f"DEBUG: All valgrind passed: {all_valgrind_passed}")
+        if not all_valgrind_passed:
+            print(f"The following tests failed valgrind's leak check")
+            for t, v in self.valgrind_results.items():
+                if not v:
+                    print (t)
         self.record_result("valgrind_memory_check", all_valgrind_passed)
     
     def get_score(self, category: str = None) -> Tuple[int, int]:

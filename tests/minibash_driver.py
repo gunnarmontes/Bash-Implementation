@@ -119,6 +119,8 @@ class PointSystem:
         self.valgrind_enabled = False
         # Track which tests failed valgrind (but may have passed functionally)
         self.valgrind_failures = set()
+        # Track proportional valgrind scoring ratio
+        self.valgrind_score_ratio = 0.0
     
     def add_test_config(self, config: TestConfig):
         """Add a test configuration."""
@@ -217,16 +219,25 @@ class PointSystem:
     
     def evaluate_valgrind_results(self):
         """Evaluate valgrind tests and record overall valgrind score."""
-        # Valgrind passes only if ALL valgrind tests have no memory leaks
-        #print(f"DEBUG: Valgrind results: {self.valgrind_results}")
-        all_valgrind_passed = all(self.valgrind_results.values()) if self.valgrind_results else False
-        #print(f"DEBUG: All valgrind passed: {all_valgrind_passed}")
-        if not all_valgrind_passed:
-            print(f"The following tests failed valgrind's leak check")
-            for t, v in self.valgrind_results.items():
-                if not v:
-                    print (t)
-        self.record_result("valgrind_memory_check", all_valgrind_passed)
+        # Calculate proportional score: A/n where A = tests passed, n = total tests
+        if not self.valgrind_results:
+            # No valgrind results recorded
+            self.record_result("valgrind_memory_check", False)
+            return
+            
+        total_tests = len(self.valgrind_results)
+        passed_tests = sum(1 for result in self.valgrind_results.values() if result)
+        
+        # Calculate the proportion of tests that passed valgrind
+        # This will be used to scale the valgrind points accordingly
+        valgrind_score_ratio = passed_tests / total_tests if total_tests > 0 else 0
+        
+        #print(f"DEBUG: Valgrind results: {passed_tests}/{total_tests} passed ({valgrind_score_ratio:.2%})")
+        
+        # Store the proportional result - we'll handle fractional scoring in get_score()
+        self.valgrind_score_ratio = valgrind_score_ratio
+        # For compatibility, record as passed if all tests passed
+        self.record_result("valgrind_memory_check", valgrind_score_ratio == 1.0)
     
     def get_score(self, category: str = None) -> Tuple[int, int]:
         """Get current score for category or overall.
@@ -248,7 +259,12 @@ class PointSystem:
                     continue
                 
                 total += config.points
-                if self.results.get(test_name, False):
+                
+                # Handle proportional valgrind scoring
+                if config.category == 'valgrind' and hasattr(self, 'valgrind_score_ratio'):
+                    # Use proportional scoring: earned = total_points * (passed_tests / total_tests)
+                    earned += int(config.points * self.valgrind_score_ratio)
+                elif self.results.get(test_name, False):
                     earned += config.points
         
         return earned, total
@@ -268,11 +284,7 @@ class PointSystem:
         # Overall score
         earned, total = self.get_score()
         percentage = (earned / total) * 100 if total > 0 else 0
-        total_possible = self.get_total_possible_points()
-        if total_possible != total:
-            lines.append(f"  Overall: {earned}/{total} ({percentage:.1f}%) [Total possible: {total_possible}]")
-        else:
-            lines.append(f"  Overall: {earned}/{total} ({percentage:.1f}%)")
+        lines.append(f"  Overall: {earned}/{total} ({percentage:.1f}%)")
         
         return '\n'.join(lines)
 from dataclasses import dataclass
@@ -439,11 +451,7 @@ def print_score_summary(point_system, verbose, all_output):
         # Add overall score
         earned, total = point_system.get_score()
         percentage = (earned / total) * 100 if total > 0 else 0
-        total_possible = point_system.get_total_possible_points()
-        if total_possible != total:
-            score_text = f"{earned}/{total} ({percentage:.1f}%) [Max: {total_possible}]"
-        else:
-            score_text = f"{earned}/{total} ({percentage:.1f}%)"
+        score_text = f"{earned}/{total} ({percentage:.1f}%)"
         overall_score_row = create_table_row("Overall Score", score_text, earned == total)
         print(overall_score_row)
         all_output.append(overall_score_row)
@@ -468,11 +476,7 @@ def print_score_summary(point_system, verbose, all_output):
         earned, total = point_system.get_score()
         percentage = (earned / total) * 100 if total > 0 else 0
         status = "✓" if earned == total else "✗"
-        total_possible = point_system.get_total_possible_points()
-        if total_possible != total:
-            print(f"\n{status} Overall Score: {earned}/{total} ({percentage:.1f}%) [Total possible: {total_possible}]")
-        else:
-            print(f"\n{status} Overall Score: {earned}/{total} ({percentage:.1f}%)")
+        print(f"\n{status} Overall Score: {earned}/{total} ({percentage:.1f}%)")
         print("=" * 60)
 
 
@@ -943,22 +947,31 @@ def run_all_tests(shell_path="./minibash", verbose=False, point_system=None, wit
         for test_name, (script_path, reg_path) in py_tests.items():
             current_test += 1
             
-            success, output = execute_and_display_test(
-                test_name, run_test, 
-                (test_name, script_path, shell_path, verbose, False),  # False for valgrind
+            # Run the functional test first
+            success, output = run_test(test_name, script_path, shell_path, verbose, False)
+            
+            # Check valgrind if enabled
+            valgrind_failed = False
+            if with_valgrind:
+                _, valgrind_output = run_test(test_name, script_path, shell_path, verbose, True)
+                no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
+                point_system.record_valgrind_result(test_name, no_memory_leaks)
+                valgrind_failed = not no_memory_leaks
+            
+            # Display the test result with valgrind status
+            def dummy_runner(*args):
+                return success, output
+            
+            _, _ = execute_and_display_test(
+                test_name, dummy_runner, 
+                (),  # No args needed for dummy runner
                 point_system, current_test, total_tests, start_time, verbose, all_output,
-                valgrind=False, valgrind_failed=False
+                valgrind=with_valgrind, valgrind_failed=valgrind_failed
             )
             
             results[test_name] = success
             if not success:
                 all_success = False
-            
-            # If with_valgrind is enabled, also run with valgrind for memory leak checking
-            if with_valgrind:
-                _, valgrind_output = run_test(test_name, script_path, shell_path, verbose, True)
-                no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
-                point_system.record_valgrind_result(test_name, no_memory_leaks)
     
     # Run shell script tests
     for category in ['basic', 'advanced']:
@@ -971,22 +984,31 @@ def run_all_tests(shell_path="./minibash", verbose=False, point_system=None, wit
                 current_test += 1
                 script_path, expected_path = category_tests[test_name]
                 
-                success, output = execute_and_display_test(
-                    test_name, run_sh_test,
-                    (test_name, script_path, expected_path, shell_path, verbose, False),  # False for valgrind
+                # Run the functional test first
+                success, output = run_sh_test(test_name, script_path, expected_path, shell_path, verbose, False)
+                
+                # Check valgrind if enabled
+                valgrind_failed = False
+                if with_valgrind:
+                    _, valgrind_output = run_valgrind_on_shell(script_path, shell_path)
+                    no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
+                    point_system.record_valgrind_result(test_name, no_memory_leaks)
+                    valgrind_failed = not no_memory_leaks
+                
+                # Display the test result with valgrind status
+                def dummy_runner(*args):
+                    return success, output
+                
+                _, _ = execute_and_display_test(
+                    test_name, dummy_runner,
+                    (),  # No args needed for dummy runner
                     point_system, current_test, total_tests, start_time, verbose, all_output,
-                    valgrind=False, valgrind_failed=False
+                    valgrind=with_valgrind, valgrind_failed=valgrind_failed
                 )
                 
                 results[f"{category}_{test_name}"] = success
                 if not success:
                     all_success = False
-                
-                # If with_valgrind is enabled, also run with valgrind for memory leak checking
-                if with_valgrind:
-                    _, valgrind_output = run_valgrind_on_shell(script_path, shell_path)
-                    no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
-                    point_system.record_valgrind_result(test_name, no_memory_leaks)
     
     # Check if any tests were found
     if not py_tests and not any(sh_tests.values()):
@@ -1052,21 +1074,30 @@ def run_shell_tests_category(category, category_tests, shell_path="./minibash", 
         current_test += 1
         script_path, expected_path = category_tests[test_name]
         
-        success, output = execute_and_display_test(
-            test_name, run_sh_test,
-            (test_name, script_path, expected_path, shell_path, verbose, False),  # False for valgrind
-            point_system, current_test, total_tests, start_time, verbose, all_output,
-            valgrind=False, valgrind_failed=False
-        )
+        # Run the functional test first
+        success, output = run_sh_test(test_name, script_path, expected_path, shell_path, verbose, False)
         
-        if not success:
-            all_success = False
-        
-        # If with_valgrind is enabled, also run with valgrind for memory leak checking
+        # Check valgrind if enabled
+        valgrind_failed = False
         if with_valgrind:
             _, valgrind_output = run_valgrind_on_shell(script_path, shell_path)
             no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
             point_system.record_valgrind_result(test_name, no_memory_leaks)
+            valgrind_failed = not no_memory_leaks
+        
+        # Display the test result with valgrind status
+        def dummy_runner(*args):
+            return success, output
+        
+        _, _ = execute_and_display_test(
+            test_name, dummy_runner,
+            (),  # No args needed for dummy runner
+            point_system, current_test, total_tests, start_time, verbose, all_output,
+            valgrind=with_valgrind, valgrind_failed=valgrind_failed
+        )
+        
+        if not success:
+            all_success = False
     
     # Evaluate valgrind results if valgrind was run
     if with_valgrind:
@@ -1267,6 +1298,13 @@ Examples:
                 
                 success, output = run_sh_test(args.test, script_path, expected_path, args.shell, args.verbose)
                 
+                # Check valgrind if requested
+                if args.valgrind:
+                    _, valgrind_output = run_valgrind_on_shell(script_path, args.shell)
+                    no_memory_leaks = check_valgrind_for_leaks(valgrind_output)
+                    if not no_memory_leaks and success:
+                        output = output.replace("PASS:", "PASS (valgrind failed):")
+                
                 # Add point information if available
                 if args.test in point_system.test_configs:
                     points = point_system.test_configs[args.test].points
@@ -1316,10 +1354,14 @@ Examples:
             sys.exit(1)
         
         # Create category-specific point system
-        advanced_point_system = PointSystem(basic_ratio=0.0)
+        if args.valgrind:
+            advanced_point_system = PointSystem(basic_ratio=0.0)
+            advanced_point_system.add_valgrind_test()
+        else:
+            advanced_point_system = PointSystem(basic_ratio=0.0)
         advanced_point_system.distribute_points({}, sh_tests['advanced'], {})
         
-        success, output, _ = run_shell_tests_category('advanced', sh_tests['advanced'], args.shell, args.verbose, advanced_point_system)
+        success, output, _ = run_shell_tests_category('advanced', sh_tests['advanced'], args.shell, args.verbose, advanced_point_system, args.valgrind)
         sys.exit(0 if success else 1)
     
     elif args.python_only:

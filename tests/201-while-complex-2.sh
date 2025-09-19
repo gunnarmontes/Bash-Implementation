@@ -8,6 +8,9 @@ count=0
 # Loop until the current time reaches or passes that target.
 while [ "$(date +%s)" -lt "$target_epoch" ]; do
     count=$(expr $count + 1)
-    echo $count
+    if [ "$count" -lt 9 ];
+    then
+        echo $count
+    fi
     sleep .2
 done

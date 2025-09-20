@@ -138,6 +138,59 @@ class PointSystem:
         )
         self.add_test_config(valgrind_config)
     
+    @classmethod
+    def create_for_category(cls, category: str, all_basic_tests: Dict, all_advanced_tests: Dict, 
+                          all_python_tests: Dict = None, include_valgrind: bool = False):
+        """Create a PointSystem for a specific category with correct proportional points.
+        
+        Args:
+            category: 'basic', 'advanced', or 'python'
+            all_basic_tests: Dict of all basic tests (for calculating proportions)
+            all_advanced_tests: Dict of all advanced tests (for calculating proportions)
+            all_python_tests: Dict of all python tests (for calculating proportions)
+            include_valgrind: Whether to include valgrind points
+            
+        Returns:
+            PointSystem instance with correct proportional points for the category
+        """
+        # Calculate the overall proportions based on all tests
+        basic_count = len(all_basic_tests)
+        advanced_count = len(all_advanced_tests)
+        python_count = len(all_python_tests) if all_python_tests else 0
+        
+        # Create a reference point system to get the correct ratios
+        ref_system = cls()
+        ref_system.distribute_points(all_basic_tests, all_advanced_tests, all_python_tests)
+        
+        if category == 'basic':
+            # Get the total points that basic tests should have
+            basic_total_points = ref_system.basic_total
+            point_system = cls(total_points=basic_total_points, basic_ratio=1.0)
+            if include_valgrind:
+                point_system.add_valgrind_test()
+            point_system.distribute_points(all_basic_tests, {}, {})
+            
+        elif category == 'advanced':
+            # Get the total points that advanced tests should have
+            advanced_total_points = ref_system.advanced_total
+            point_system = cls(total_points=advanced_total_points, basic_ratio=0.0)
+            if include_valgrind:
+                point_system.add_valgrind_test()
+            point_system.distribute_points({}, all_advanced_tests, {})
+            
+        elif category == 'python':
+            # Python tests get minimal points - use the same allocation as in distribute_points
+            python_total_points = python_count  # 1 point per test
+            point_system = cls(total_points=python_total_points, basic_ratio=0.0)
+            if include_valgrind:
+                point_system.add_valgrind_test()
+            point_system.distribute_points({}, {}, all_python_tests)
+            
+        else:
+            raise ValueError(f"Unknown category: {category}")
+            
+        return point_system
+    
     def get_total_possible_points(self):
         """Get total possible points based on whether valgrind is enabled."""
         if self.valgrind_enabled:
@@ -703,54 +756,6 @@ def check_valgrind_for_leaks(output):
     return False
 
 
-def validate_timing_agnostic_output(test_name, actual_output):
-    """
-    Validate output for timing-sensitive tests in a timing-agnostic way.
-    
-    Args:
-        test_name: Name of the test
-        actual_output: The actual output from the test
-    
-    Returns:
-        bool: True if output matches expected pattern, False otherwise
-    """
-    lines = actual_output.strip().split('\n')
-    
-    if test_name == "200-while-complex":
-        # Should output consecutive numbers starting from 0
-        # Allow 4-7 numbers (should be around 5, but timing can vary)
-        if len(lines) < 4 or len(lines) > 7:
-            return False
-        
-        # Check that lines are consecutive numbers starting from 0
-        for i, line in enumerate(lines):
-            try:
-                if int(line.strip()) != i:
-                    return False
-            except ValueError:
-                return False
-        return True
-    
-    elif test_name == "201-while-complex-2":
-        # Should start with "Starting" then consecutive numbers from 1
-        # Allow 12-20 total lines (first line is "Starting", then ~3 seconds / 0.2s = ~15 numbers)
-        if len(lines) < 12 or len(lines) > 20:
-            return False
-        
-        # First line should be "Starting"
-        if lines[0].strip() != "Starting":
-            return False
-        
-        # Remaining lines should be consecutive numbers starting from 1
-        for i, line in enumerate(lines[1:], 1):
-            try:
-                if int(line.strip()) != i:
-                    return False
-            except ValueError:
-                return False
-        return True
-    
-    return False
 
 
 def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", verbose=False, valgrind=False):
@@ -781,7 +786,7 @@ def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", 
         timing_sensitive_tests = ["200-while-complex", "201-while-complex-2"]
         
         if test_name in timing_sensitive_tests:
-            # For timing-sensitive tests, use Popen and waitpid equivalent
+            # For timing-sensitive tests, use Popen with a reasonable timeout
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -789,13 +794,21 @@ def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", 
                 text=True
             )
             
-            # Use communicate() which is equivalent to waitpid() + reading output
-            # This blocks until process completes (like waitpid(pid, &status, 0) in C)
-            stdout, stderr = process.communicate()
-            
-            actual_output = stdout
-            result_returncode = process.returncode
-            result_stderr = stderr
+            try:
+                # Use communicate() with timeout to prevent hanging
+                # Allow extra time for the timing-sensitive tests to complete
+                # 200-while-complex runs for 5 seconds, 201-while-complex-2 runs for 3 seconds
+                timeout_seconds = 15  # Give extra buffer time
+                stdout, stderr = process.communicate(timeout=timeout_seconds)
+                
+                actual_output = stdout
+                result_returncode = process.returncode
+                result_stderr = stderr
+            except subprocess.TimeoutExpired:
+                # If the process times out, kill it and return failure
+                process.kill()
+                stdout, stderr = process.communicate()
+                return False, f"TIMEOUT: {test_name} exceeded {timeout_seconds} seconds (process may have hung)"
         else:
             # For other tests, use the original approach with timeout
             timeout = 30  # Allow up to 30 seconds for tests to complete
@@ -851,45 +864,23 @@ def run_sh_test(test_name, script_path, expected_path, shell_path="./minibash", 
                     if result_stderr:
                         output += f"\nStderr:\n{result_stderr}"
         else:
-            # For .out files, check if this is a timing-sensitive test
-            timing_sensitive_tests = ["200-while-complex", "201-while-complex-2"]
+            # For .out files, do exact comparison with expected output
+            with open(expected_path, 'r') as f:
+                expected_output = f.read()
             
-            if test_name in timing_sensitive_tests:
-                # Use timing-agnostic validation
-                success = validate_timing_agnostic_output(test_name, actual_output)
-                
-                if success:
-                    output = f"PASS: {test_name} (timing-agnostic)"
-                    if verbose:
-                        output += f"\nActual output:\n{repr(actual_output)}"
-                else:
-                    output = f"FAIL: {test_name} (timing-agnostic)"
-                    output += f"\nActual output:\n{repr(actual_output)}"
-                    output += f"\nExpected pattern: "
-                    if test_name == "200-while-complex":
-                        output += "consecutive numbers 0-4 (±2 tolerance)"
-                    elif test_name == "201-while-complex-2":
-                        output += "'Starting' followed by consecutive numbers 1-15 (±3 tolerance)"
-                    if result_stderr:
-                        output += f"\nStderr:\n{result_stderr}"
-            else:
-                # For regular .out files, do exact comparison
-                with open(expected_path, 'r') as f:
-                    expected_output = f.read()
-                
-                success = actual_output == expected_output
-                
-                if success:
-                    output = f"PASS: {test_name}"
-                    if verbose:
-                        output += f"\nExpected output:\n{repr(expected_output)}"
-                        output += f"\nActual output:\n{repr(actual_output)}"
-                else:
-                    output = f"FAIL: {test_name}"
+            success = actual_output == expected_output
+            
+            if success:
+                output = f"PASS: {test_name}"
+                if verbose:
                     output += f"\nExpected output:\n{repr(expected_output)}"
                     output += f"\nActual output:\n{repr(actual_output)}"
-                    if result_stderr:
-                        output += f"\nStderr:\n{result_stderr}"
+            else:
+                output = f"FAIL: {test_name}"
+                output += f"\nExpected output:\n{repr(expected_output)}"
+                output += f"\nActual output:\n{repr(actual_output)}"
+                if result_stderr:
+                    output += f"\nStderr:\n{result_stderr}"
         
         return success, output
         
@@ -1229,8 +1220,13 @@ def run_three_phase_tests(shell_path="./minibash", verbose=False, with_valgrind=
         print("PHASE 1: Basic Tests (Functional)")
         print(f"{'='*70}")
         
-        basic_point_system = PointSystem(basic_ratio=1.0)
-        basic_point_system.distribute_points(sh_tests['basic'], {}, {})
+        basic_point_system = PointSystem.create_for_category(
+            'basic', 
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests,
+            include_valgrind=False
+        )
         
         success, output, _ = run_shell_tests_category(
             'basic', sh_tests['basic'], shell_path, verbose, basic_point_system, False
@@ -1251,8 +1247,13 @@ def run_three_phase_tests(shell_path="./minibash", verbose=False, with_valgrind=
         print("PHASE 2: Advanced Tests (Functional)")
         print(f"{'='*70}")
         
-        advanced_point_system = PointSystem(basic_ratio=0.0)
-        advanced_point_system.distribute_points({}, sh_tests['advanced'], {})
+        advanced_point_system = PointSystem.create_for_category(
+            'advanced', 
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests,
+            include_valgrind=False
+        )
         
         success, output, _ = run_shell_tests_category(
             'advanced', sh_tests['advanced'], shell_path, verbose, advanced_point_system, False
@@ -1273,8 +1274,13 @@ def run_three_phase_tests(shell_path="./minibash", verbose=False, with_valgrind=
         print("PHASE 2.5: Python Tests (Functional)")
         print(f"{'='*70}")
         
-        python_point_system = PointSystem()
-        python_point_system.distribute_points({}, {}, py_tests)
+        python_point_system = PointSystem.create_for_category(
+            'python', 
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests,
+            include_valgrind=False
+        )
         
         success, output, _ = run_python_tests_only(py_tests, shell_path, verbose, python_point_system)
         
@@ -1532,13 +1538,14 @@ Examples:
             print("No basic shell script tests found.")
             sys.exit(1)
         
-        # Create category-specific point system
-        if args.valgrind:
-            basic_point_system = PointSystem(basic_ratio=1.0)
-            basic_point_system.add_valgrind_test()
-        else:
-            basic_point_system = PointSystem(basic_ratio=1.0)
-        basic_point_system.distribute_points(sh_tests['basic'], {}, {})
+        # Create category-specific point system with correct proportional points
+        basic_point_system = PointSystem.create_for_category(
+            'basic', 
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests,
+            include_valgrind=args.valgrind
+        )
         
         success, output, _ = run_shell_tests_category('basic', sh_tests['basic'], args.shell, args.verbose, basic_point_system, args.valgrind)
         sys.exit(0 if success else 1)
@@ -1549,13 +1556,14 @@ Examples:
             print("No advanced shell script tests found.")
             sys.exit(1)
         
-        # Create category-specific point system
-        if args.valgrind:
-            advanced_point_system = PointSystem(basic_ratio=0.0)
-            advanced_point_system.add_valgrind_test()
-        else:
-            advanced_point_system = PointSystem(basic_ratio=0.0)
-        advanced_point_system.distribute_points({}, sh_tests['advanced'], {})
+        # Create category-specific point system with correct proportional points
+        advanced_point_system = PointSystem.create_for_category(
+            'advanced', 
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests,
+            include_valgrind=args.valgrind
+        )
         
         success, output, _ = run_shell_tests_category('advanced', sh_tests['advanced'], args.shell, args.verbose, advanced_point_system, args.valgrind)
         sys.exit(0 if success else 1)
@@ -1566,7 +1574,16 @@ Examples:
             print("No Python tests found.")
             sys.exit(1)
         
-        success, output, _ = run_python_tests_only(py_tests, args.shell, args.verbose)
+        # Create category-specific point system with correct proportional points
+        python_point_system = PointSystem.create_for_category(
+            'python', 
+            sh_tests.get('basic', {}), 
+            sh_tests.get('advanced', {}), 
+            py_tests,
+            include_valgrind=False  # Python tests don't typically use valgrind
+        )
+        
+        success, output, _ = run_python_tests_only(py_tests, args.shell, args.verbose, python_point_system)
         sys.exit(0 if success else 1)
     
     else:

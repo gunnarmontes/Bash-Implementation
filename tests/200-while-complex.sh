@@ -12,12 +12,12 @@ while true; do
     last_elapsed=$elapsed
     sleep 1
 done
-if [ "$lastoutput" -eq 2 ]
+if [ "$last_elapsed" -eq 2 ]
 then
     echo 3
     echo 4                  # in case we output only 1, 2 output 3, 4
 fi
-if [ "$lastoutput" -eq 3 ]
+if [ "$last_elapsed" -eq 3 ]
 then
     echo 4                  # in case we output only 1, 2, 3 output 4
 fi

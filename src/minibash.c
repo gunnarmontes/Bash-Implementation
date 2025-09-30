@@ -248,7 +248,6 @@ handle_child_status(pid_t pid, int status)
      */
 
 }
-
 static void handle_command(TSNode command_node) {
 
     TSNode name_node = ts_node_child_by_field_id(command_node, nameId);
@@ -269,21 +268,21 @@ static void handle_command(TSNode command_node) {
             if (ts_node_eq(ch, name_node))
                 continue;
 
-            char *text = ts_extract_node_text(input, ch);                     // [020]
-            if (!text)                                                        // [020]
-                continue;                                                     // [020]
+            char *text = ts_extract_node_text(input, ch);
+            if (!text)
+                continue;
 
             if (!first) putchar(' ');
 
-            /* Expand "$?" exactly (Tree-sitter gives this as sym_simple_expansion). */ // [020]
-            if (ts_node_symbol(ch) == sym_simple_expansion && strcmp(text, "$?") == 0) { // [020]
-                char buf[32];                                                            // [020]
-                snprintf(buf, sizeof buf, "%d", last_status);                            // [020]
-                fputs(buf, stdout);                                                      // [020]
-                free(text);                                                              // [020]
-                first = false;                                                           // [020]
-                continue;                                                                // [020]
-            }                                                                            // [020]
+            /* Expand "$?" exactly */
+            if (ts_node_symbol(ch) == sym_simple_expansion && strcmp(text, "$?") == 0) {
+                char buf[32];
+                snprintf(buf, sizeof buf, "%d", last_status);
+                fputs(buf, stdout);
+                free(text);
+                first = false;
+                continue;
+            }
 
             /* Strip exactly one matching pair of outer quotes, if present. */
             size_t len = strlen(text);
@@ -305,29 +304,57 @@ static void handle_command(TSNode command_node) {
 
         putchar('\n');
         free(cmd);
-        last_status = 0;                                                       // [020] builtin echo succeeded
+        last_status = 0;
         return;
     }
     /* ---- end builtin: echo ---- */
 
-    /* Use PATH only for the simplest bareword form (no args/redirs), as before */
-    int use_execvp = 0;
-    if (strchr(cmd, '/') == NULL) {
-        uint32_t named = ts_node_named_child_count(command_node);
-        if (named == 1)
-            use_execvp = 1;
-        /* TODO: enable PATH lookup for additional forms (args/redirs) when tests require it. */
-    }
+    /* -------- externals: build argv and choose execvp/execv -------- */
 
-    char *argv[2];
-    argv[0] = cmd;
-    argv[1] = NULL;
+    /* 1) Count plain word arguments (022 only needs simple words like "-segfault"). */      // [022]
+    uint32_t named = ts_node_named_child_count(command_node);                                 // [022]
+    int word_argc = 0;                                                                        // [022]
+    for (uint32_t i = 0; i < named; i++) {                                                    // [022]
+        TSNode ch = ts_node_named_child(command_node, i);                                     // [022]
+        if (ts_node_eq(ch, name_node))                                                        // [022]
+            continue;                                                                         // [022]
+        if (ts_node_symbol(ch) == sym_word)                                                   // [022]
+            word_argc++;                                                                      // [022]
+        /* TODO: handle quoted words / expansions / redirects as args when tests require. */  // [022]
+    }                                                                                         // [022]
+
+    /* 2) Allocate argv = { cmd, <word args...>, NULL } */                                     // [022]
+    char **argv = calloc((size_t)word_argc + 2, sizeof(char *));                              // [022]
+    if (!argv) {                                                                              // [022]
+        /* Minimal failure handling: try to exec with just cmd and NULL */                    // [022]
+        argv = (char **)malloc(2 * sizeof(char *));                                           // [022]
+        if (!argv) { free(cmd); return; }                                                     // [022]
+        argv[0] = cmd;                                                                        // [022]
+        argv[1] = NULL;                                                                       // [022]
+        word_argc = 0;                                                                        // [022]
+    } else {                                                                                  // [022]
+        argv[0] = cmd;                                                                        // [022]
+        int idx = 1;                                                                          // [022]
+        for (uint32_t i = 0; i < named; i++) {                                                // [022]
+            TSNode ch = ts_node_named_child(command_node, i);                                 // [022]
+            if (ts_node_eq(ch, name_node))                                                    // [022]
+                continue;                                                                     // [022]
+            if (ts_node_symbol(ch) != sym_word)                                               // [022]
+                continue;                                                                     // [022]
+            char *arg = ts_extract_node_text(input, ch);                                      // [022]
+            if (arg) argv[idx++] = arg;                                                       // [022]
+        }                                                                                     // [022]
+        argv[word_argc + 1] = NULL;                                                           // [022]
+    }                                                                                         // [022]
+
+    /* 3) Choose exec: bareword → execvp (PATH), absolute path → execv */                     // [022]
+    int use_execvp = (strchr(cmd, '/') == NULL);                                              // [022]
 
     pid_t pid = fork();
 
     if (pid == 0) {
-        if (use_execvp) {
-            execvp(cmd, argv);
+        if (use_execvp) {                                                                     // [022]
+            execvp(cmd, argv);                                                                // [022]
         } else {
             execv(cmd, argv);
         }
@@ -335,16 +362,23 @@ static void handle_command(TSNode command_node) {
     } else {
         int status;
         (void)waitpid(pid, &status, 0);
-        if (WIFEXITED(status))                                                // [020]
-            last_status = WEXITSTATUS(status);                                // [020]
-        else if (WIFSIGNALED(status))                                         // [020]
-            last_status = 128 + WTERMSIG(status);                             // [020]
-        else                                                                  // [020]
-            last_status = 1; /* conservative default */                       // [020]
+        if (WIFEXITED(status))
+            last_status = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status))
+            last_status = 128 + WTERMSIG(status);
+        else
+            last_status = 1; /* conservative default */
     }
+
+    /* 4) Free argv entries (skip argv[0] — that's `cmd`, freed below) */                      // [022]
+    for (int i = 1; i <= word_argc; i++) {                                                    // [022]
+        free(argv[i]);                                                                         // [022]
+    }                                                                                          // [022]
+    free(argv);                                                                                // [022]
 
     free(cmd);
 }
+
 
 
 

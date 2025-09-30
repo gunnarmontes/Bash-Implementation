@@ -248,6 +248,85 @@ handle_child_status(pid_t pid, int status)
 
 }
 
+static void handle_command(TSNode command_node) {
+
+    TSNode name_node = ts_node_child_by_field_id(command_node, nameId);
+    char *cmd = ts_extract_node_text(input, name_node);
+
+    if (cmd == NULL) {
+        printf("COuldnt extract command name\n");
+        return;
+    }
+
+
+    if (strcmp(cmd, "echo") == 0) {                                                     // [added for 010-echo]
+        uint32_t n = ts_node_named_child_count(command_node);                           // [added for 010-echo]
+        bool first = true;                                                              // [added for 010-echo]
+        for (uint32_t i = 0; i < n; i++) {                                              // [added for 010-echo]
+            TSNode ch = ts_node_named_child(command_node, i);                           // [added for 010-echo]
+            if (ts_node_eq(ch, name_node))                                              // [added for 010-echo]
+                continue;                                                               // [added for 010-echo]
+            char *arg = ts_extract_node_text(input, ch);                                // [added for 010-echo]
+            if (arg) {                                                                  // [added for 010-echo]
+                if (!first) putchar(' ');                                               // [added for 010-echo]
+                printf("%s", arg);                                                      // [added for 010-echo]
+                free(arg);                                                              // [added for 010-echo]
+                first = false;                                                          // [added for 010-echo]
+            }                                                                            // [added for 010-echo]
+        }                                                                                // [added for 010-echo]
+        putchar('\n');                                                                   // [added for 010-echo]
+        free(cmd);                                                                       // [added for 010-echo]
+        return;                                                                          // [added for 010-echo]
+    } 
+
+    /* Use PATH only for the simplest bareword form:
+       - command name has no '/' (bareword), and
+       - the command node has exactly one named child (the name itself),
+         i.e., no args, no redirections yet. */
+    int use_execvp = 0;                                                            // [refactor-007]
+    if (strchr(cmd, '/') == NULL) {                                                // [refactor-007]
+        uint32_t named = ts_node_named_child_count(command_node);                  // [refactor-007]
+        if (named == 1)                                                            // [refactor-007]
+            use_execvp = 1;                                                        // [refactor-007]
+        /* TODO: enable PATH lookup for additional forms (args/redirs) when tests require it. */ // [refactor-007]
+    }                                                                               // [refactor-007]
+
+    char *argv[2];
+    argv[0] = cmd;
+    argv[1] = NULL;
+
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (use_execvp) {                      // [refactor-007]
+            execvp(cmd, argv);                 // [refactor-007]
+        } else {                               // [refactor-007]
+            execv(cmd, argv);
+        }                                      // [refactor-007]
+        _exit(127);
+    } else {
+        int status;
+        (void)waitpid(pid, &status, 0);
+    }
+
+    free(cmd);
+}
+
+
+static void execute_node(TSNode child) {
+
+    switch (ts_node_symbol(child)) {
+
+        case sym_comment:
+            break;
+        case sym_command:
+            handle_command(child);
+            break;
+        default:
+            ts_print_node_info(child, "Unimplemented node");
+            break;
+    }
+}
 /*
  * Run a program.
  *
@@ -260,7 +339,7 @@ run_program(TSNode program)
     uint32_t n = ts_node_named_child_count(program);
     for (uint32_t i = 0; i < n; i++) {
         TSNode child = ts_node_named_child(program, i);
-        printf("node type `%s` not implemented\n", ts_node_type(child));
+        execute_node(child);
     }
 }
 
@@ -287,6 +366,7 @@ read_script_from_fd(int readfd)
     return userinput;
 }
 
+
 /* 
  * Execute the script whose content is provided in `script`
  */
@@ -310,6 +390,7 @@ main(int ac, char *av[])
 
     /* Process command-line arguments. See getopt(3) */
     while ((opt = getopt(ac, av, "h")) > 0) {
+        
         switch (opt) {
         case 'h':
             usage(av[0]);

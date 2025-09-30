@@ -258,38 +258,54 @@ static void handle_command(TSNode command_node) {
         return;
     }
 
+    /* ---- builtin: echo — handles plain, "" and '' args ---- */
+    if (strcmp(cmd, "echo") == 0) {                                                     // [015-out]
+        uint32_t n = ts_node_named_child_count(command_node);                           // [015-out]
+        bool first = true;                                                              // [015-out]
 
-    if (strcmp(cmd, "echo") == 0) {                                                     // [added for 010-echo]
-        uint32_t n = ts_node_named_child_count(command_node);                           // [added for 010-echo]
-        bool first = true;                                                              // [added for 010-echo]
-        for (uint32_t i = 0; i < n; i++) {                                              // [added for 010-echo]
-            TSNode ch = ts_node_named_child(command_node, i);                           // [added for 010-echo]
-            if (ts_node_eq(ch, name_node))                                              // [added for 010-echo]
-                continue;                                                               // [added for 010-echo]
-            char *arg = ts_extract_node_text(input, ch);                                // [added for 010-echo]
-            if (arg) {                                                                  // [added for 010-echo]
-                if (!first) putchar(' ');                                               // [added for 010-echo]
-                printf("%s", arg);                                                      // [added for 010-echo]
-                free(arg);                                                              // [added for 010-echo]
-                first = false;                                                          // [added for 010-echo]
-            }                                                                            // [added for 010-echo]
-        }                                                                                // [added for 010-echo]
-        putchar('\n');                                                                   // [added for 010-echo]
-        free(cmd);                                                                       // [added for 010-echo]
-        return;                                                                          // [added for 010-echo]
-    } 
+        for (uint32_t i = 0; i < n; i++) {                                              // [015-out]
+            TSNode ch = ts_node_named_child(command_node, i);                           // [015-out]
+            if (ts_node_eq(ch, name_node))                                              // [015-out]
+                continue;                                                               // [015-out]
 
-    /* Use PATH only for the simplest bareword form:
-       - command name has no '/' (bareword), and
-       - the command node has exactly one named child (the name itself),
-         i.e., no args, no redirections yet. */
-    int use_execvp = 0;                                                            // [refactor-007]
-    if (strchr(cmd, '/') == NULL) {                                                // [refactor-007]
-        uint32_t named = ts_node_named_child_count(command_node);                  // [refactor-007]
-        if (named == 1)                                                            // [refactor-007]
-            use_execvp = 1;                                                        // [refactor-007]
-        /* TODO: enable PATH lookup for additional forms (args/redirs) when tests require it. */ // [refactor-007]
-    }                                                                               // [refactor-007]
+            char *arg = ts_extract_node_text(input, ch);                                // [015-out]
+            if (!arg)                                                                   // [015-out]
+                continue;                                                               // [015-out]
+
+            size_t len = strlen(arg);                                                   // [015-out]
+            if (!first) putchar(' ');                                                   // [015-out]
+
+            /* Strip exactly one matching pair of outer quotes, if present. */          // [015-out]
+            if (len >= 2) {                                                             // [015-out]
+                char q = arg[0];                                                        // [015-out]
+                if ((q == '"' || q == '\'') && arg[len - 1] == q) {                     // [015-out]
+                    fwrite(arg + 1, 1, len - 2, stdout);                                // [015-out]
+                    free(arg);                                                          // [015-out]
+                    first = false;                                                      // [015-out]
+                    continue;                                                           // [015-out]
+                }                                                                       // [015-out]
+            }                                                                           // [015-out]
+
+            /* No outer quotes — print as-is. */                                        // [015-out]
+            fputs(arg, stdout);                                                         // [015-out]
+            free(arg);                                                                  // [015-out]
+            first = false;                                                              // [015-out]
+        }                                                                               // [015-out]
+
+        putchar('\n');                                                                  // [015-out]
+        free(cmd);                                                                      // [015-out]
+        return;                                                                         // [015-out]
+    }                                                                                   // [015-out]
+    /* ---- end builtin: echo ---- */
+
+    /* Use PATH only for the simplest bareword form (no args/redirs), as before */
+    int use_execvp = 0;
+    if (strchr(cmd, '/') == NULL) {
+        uint32_t named = ts_node_named_child_count(command_node);
+        if (named == 1)
+            use_execvp = 1;
+        /* TODO: enable PATH lookup for additional forms (args/redirs) when tests require it. */
+    }
 
     char *argv[2];
     argv[0] = cmd;
@@ -298,11 +314,11 @@ static void handle_command(TSNode command_node) {
     pid_t pid = fork();
 
     if (pid == 0) {
-        if (use_execvp) {                      // [refactor-007]
-            execvp(cmd, argv);                 // [refactor-007]
-        } else {                               // [refactor-007]
+        if (use_execvp) {
+            execvp(cmd, argv);
+        } else {
             execv(cmd, argv);
-        }                                      // [refactor-007]
+        }
         _exit(127);
     } else {
         int status;
@@ -311,6 +327,7 @@ static void handle_command(TSNode command_node) {
 
     free(cmd);
 }
+
 
 
 static void execute_node(TSNode child) {

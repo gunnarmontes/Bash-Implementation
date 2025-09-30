@@ -45,6 +45,9 @@ static void handle_child_status(pid_t pid, int status);
 static char *read_script_from_fd(int readfd);
 static void execute_script(char *script);
 
+
+static void handle_command(TSNode command_node);
+
 static int last_status = 0; // [020]
 
 static void
@@ -270,145 +273,279 @@ static void handle_variable_assignment(TSNode assign_node) {            // [032]
     last_status = 0;                                                     // [032]
 }
 
+// NEW: capture the stdout of a command_substitution node "$( ... )" into a malloc'ed string.  // [040]
+static char *capture_command_subst(TSNode sub, char *input) {                                  // [040]
+    int fds[2];                                                                                // [040]
+    if (pipe(fds) != 0)                                                                        // [040]
+        return strdup("");                                                                     // [040]
+
+    pid_t pid = fork();                                                                        // [040]
+    if (pid == 0) {
+    close(fds[0]);
+    dup2(fds[1], STDOUT_FILENO);
+    close(fds[1]);
+
+    // run the inner command
+    uint32_t m = ts_node_named_child_count(sub);
+    for (uint32_t i = 0; i < m; i++) {
+        TSNode inner = ts_node_named_child(sub, i);
+        if (ts_node_symbol(inner) == sym_command) {
+            handle_command(inner);
+            break;
+        }
+    }
+
+    fflush(NULL);          // <-- ensure stdio buffers are flushed
+    _exit(0);              // keep _exit (don’t run atexit handlers in child)
+}
+
+
+    // Parent: read all bytes from pipe                                                        // [040]
+    close(fds[1]);                                                                             // [040]
+    char *buf = NULL;                                                                          // [040]
+    size_t len = 0, cap = 0;                                                                   // [040]
+    char tmp[4096];                                                                            // [040]
+    ssize_t n;                                                                                 // [040]
+    while ((n = read(fds[0], tmp, sizeof tmp)) > 0) {                                          // [040]
+        // reuse your append_bytes helper if present                                           // [040]
+        if (len + (size_t)n + 1 > cap) {                                                       // [040]
+            size_t newcap = cap ? cap : 64;                                                    // [040]
+            while (len + (size_t)n + 1 > newcap) newcap *= 2;                                  // [040]
+            char *t = realloc(buf, newcap);                                                    // [040]
+            if (!t) {                                                                          // [040]
+                free(buf);                                                                      // [040]
+                close(fds[0]);                                                                  // [040]
+                (void)waitpid(pid, NULL, 0);                                                    // [040]
+                return strdup("");                                                              // [040]
+            }                                                                                  // [040]
+            buf = t;                                                                            // [040]
+            cap = newcap;                                                                       // [040]
+        }                                                                                      // [040]
+        memcpy(buf + len, tmp, (size_t)n);                                                     // [040]
+        len += (size_t)n;                                                                       // [040]
+        buf[len] = '\0';                                                                        // [040]
+    }
+    close(fds[0]);                                                                             // [040]
+    (void)waitpid(pid, NULL, 0);                                                               // [040]
+
+    if (!buf) return strdup("");                                                               // [040]
+
+    // Trim all trailing newlines per bash behavior                                            // [040]
+    while (len > 0 && buf[len - 1] == '\n') {                                                  // [040]
+        buf[--len] = '\0';                                                                     // [040]
+    }
+    return buf;                                                                                // [040]
+}                                                                                              // [040]
+
+
+// NEW: expand a simple parameter expansion ($?, $$, $VAR) to a malloc'ed string.
+// Caller must free the returned pointer. Returns strdup("") if unset/unknown.
+static char *expand_simple(TSNode simple_expansion, char *input, int last_status) {   // [fixed: input is char *]
+    char *txt = ts_extract_node_text(input, simple_expansion);                         // ok: expects char *
+    if (!txt) return strdup("");
+
+    if (strcmp(txt, "$$") == 0) {
+        free(txt);
+        char buf[32];
+        snprintf(buf, sizeof buf, "%d", (int)getpid());
+        return strdup(buf);
+    }
+    if (strcmp(txt, "$?") == 0) {
+        free(txt);
+        char buf[32];
+        snprintf(buf, sizeof buf, "%d", last_status);
+        return strdup(buf);
+    }
+
+    TSNode v = ts_node_named_child(simple_expansion, 0);
+    if (!ts_node_is_null(v) && ts_node_symbol(v) == sym_variable_name) {
+        char *vname = ts_extract_node_text(input, v);                                  // ok: expects char *
+        free(txt);
+        if (!vname) return strdup("");
+        const char *val = getenv(vname);
+        free(vname);
+        return strdup(val ? val : "");
+    }
+
+    return txt;  // raw fallback
+}
+
+
+// NEW: expand a brace parameter expansion (${VAR}) to a malloc'ed string.
+// Caller must free the returned pointer. Returns strdup("") if unset/unknown.
+static char *expand_brace(TSNode expansion, char *input) {                                // [added]
+    // ${VAR} -> first named child is variable_name                                         // [added]
+    TSNode v = ts_node_named_child(expansion, 0);                                          // [added]
+    if (!ts_node_is_null(v) && ts_node_symbol(v) == sym_variable_name) {                   // [added]
+        char *vname = ts_extract_node_text(input, v);                                      // [added]
+        if (!vname) return strdup("");                                                     // [added]
+        const char *val = getenv(vname);                                                   // [added]
+        free(vname);                                                                        // [added]
+        return strdup(val ? val : "");                                                     // [added]
+    }                                                                                      // [added]
+    // Fallback: print the raw text literally                                               // [added]
+    char *raw = ts_extract_node_text(input, expansion);                                    // [added]
+    return raw ? raw : strdup("");                                                         // [added]
+}
+
+// NEW: grow-and-append helper to avoid macro pitfalls. Returns 0 on success, -1 on OOM.  // [fix]
+static int append_bytes(char **out, size_t *len, size_t *cap, const char *src, size_t nbytes) { // [fix]
+    if (!src || nbytes == 0) return 0;                                                   // [fix]
+    if (*len + nbytes + 1 > *cap) {                                                      // [fix]
+        size_t newcap = *cap ? *cap : 64;                                                // [fix]
+        while (*len + nbytes + 1 > newcap) newcap *= 2;                                   // [fix]
+        char *tmp = realloc(*out, newcap);                                               // [fix]
+        if (!tmp) return -1;                                                             // [fix]
+        *out = tmp;                                                                       // [fix]
+        *cap = newcap;                                                                    // [fix]
+    }                                                                                    // [fix]
+    memcpy(*out + *len, src, nbytes);                                                    // [fix]
+    *len += nbytes;                                                                       // [fix]
+    (*out)[*len] = '\0';                                                                  // [fix]
+    return 0;                                                                             // [fix]
+}                                                                                        // [fix]
+// Render a double-quoted string node (sym_string).
+// Expands ${VAR} and $VAR/$?/$$, but most importantly: if the string has
+// NO named children (e.g., it is just spaces), fall back to raw text and
+// strip the quotes so interior spaces are preserved.
+static char *render_dq_string(TSNode s, char *input, int last_status) {
+    uint32_t m = ts_node_named_child_count(s);
+
+    // Fallback: no named parts (e.g., string is just "  ")
+    if (m == 0) {
+        char *raw = ts_extract_node_text(input, s);
+        if (!raw) return strdup("");
+        size_t L = strlen(raw);
+        if (L >= 2 && raw[0] == '"' && raw[L-1] == '"') {
+            char *out = strndup(raw + 1, L - 2);
+            free(raw);
+            return out ? out : strdup("");
+        }
+        return raw; // unexpected, but fine
+    }
+
+    // Normal path: build from parts (string_content, expansions)
+    char *out = NULL;
+    size_t len = 0, cap = 0;
+
+    for (uint32_t j = 0; j < m; j++) {
+        TSNode part = ts_node_named_child(s, j);
+        switch (ts_node_symbol(part)) {
+            case sym_string_content: {
+                char *seg = ts_extract_node_text(input, part);
+                if (seg) {
+                    append_bytes(&out, &len, &cap, seg, strlen(seg));
+                    free(seg);
+                }
+                break;
+            }
+            case sym_expansion: { // ${VAR}
+                char *v = expand_brace(part, input);
+                if (v) { append_bytes(&out, &len, &cap, v, strlen(v)); free(v); }
+                break;
+            }
+            case sym_simple_expansion: { // $VAR / $? / $$
+                char *v = expand_simple(part, input, last_status);
+                if (v) { append_bytes(&out, &len, &cap, v, strlen(v)); free(v); }
+                break;
+            }
+            default: {
+                // Safety fallback: include raw text of unknown part
+                char *raw = ts_extract_node_text(input, part);
+                if (raw) { append_bytes(&out, &len, &cap, raw, strlen(raw)); free(raw); }
+                break;
+            }
+        }
+    }
+
+    if (!out) return strdup("");  // nothing appended
+    return out;
+}
+
+
+
+// Render a single echo argument node into a malloc'ed string.
+// Caller must free. Never returns NULL; returns strdup("") on error.
+// NOTE: default branch returns token text **as-is** (no outer-quote stripping).
+static char *render_arg(TSNode ch, char *input, int last_status) {
+    switch (ts_node_symbol(ch)) {
+        case sym_string: {
+            return render_dq_string(ch, input, last_status);
+        }
+        case sym_raw_string: {
+            char *text = ts_extract_node_text(input, ch);
+            if (!text) return strdup("");
+            size_t L = strlen(text);
+            if (L >= 2 && text[0] == '\'' && text[L-1] == '\'') {
+                char *out = strndup(text + 1, L - 2);
+                free(text);
+                return out ? out : strdup("");
+            }
+            return text;
+        }
+        case sym_simple_expansion: {
+            char *v = expand_simple(ch, input, last_status);
+            return v ? v : strdup("");
+        }
+        case sym_expansion: {
+            char *v = expand_brace(ch, input);
+            return v ? v : strdup("");
+        }
+        case sym_command_substitution: {                                 // [040]
+            return capture_command_subst(ch, input);                      // [040]
+        }
+        default: {
+            char *text = ts_extract_node_text(input, ch);
+            return text ? text : strdup("");
+        }
+    }
+}
+
 
 static void handle_command(TSNode command_node) {
     TSNode name_node = ts_node_child_by_field_id(command_node, nameId);
     char *cmd = ts_extract_node_text(input, name_node);
+    if (!cmd) return;
 
-    if (cmd == NULL) {
-        // No stdout noise; assignments are handled in execute_node.
-        return;
-    }
-
-    /* ---- builtin: echo — plain/""/'' + "$?" + "$$" + $VAR + ${VAR} ---- */
+    /* ---- builtin: echo ---- */
     if (strcmp(cmd, "echo") == 0) {
         uint32_t n = ts_node_named_child_count(command_node);
         bool first = true;
 
         for (uint32_t i = 0; i < n; i++) {
             TSNode ch = ts_node_named_child(command_node, i);
-            if (ts_node_eq(ch, name_node))
-                continue;
+            if (ts_node_eq(ch, name_node)) continue;
 
-            /* ----- parameter expansions first ----- */
-            if (ts_node_symbol(ch) == sym_simple_expansion) {
-                char *txt = ts_extract_node_text(input, ch);
-                if (!txt) continue;
-                if (!first) putchar(' ');
+            char *out = render_arg(ch, input, last_status);                 // [changed] render first
+            if (!out) out = strdup("");
 
-                /* $$ -> shell pid */
-                if (strcmp(txt, "$$") == 0) {
-                    char buf[32];
-                    snprintf(buf, sizeof buf, "%d", (int)getpid());
-                    fputs(buf, stdout);
-                    free(txt);
-                    first = false;
-                    continue;
-                }
-
-                /* $? -> last exit status */
-                if (strcmp(txt, "$?") == 0) {
-                    char buf[32];
-                    snprintf(buf, sizeof buf, "%d", last_status);
-                    fputs(buf, stdout);
-                    free(txt);
-                    first = false;
-                    continue;
-                }
-
-                /* $VAR -> getenv("VAR") (variable_name is the first named child) */
-                TSNode v = ts_node_named_child(ch, 0);                              // [030-fix]
-                if (!ts_node_is_null(v) && ts_node_symbol(v) == sym_variable_name) {// [030-fix]
-                    char *vname = ts_extract_node_text(input, v);                   // [030-fix]
-                    if (vname) {
-                        const char *val = getenv(vname);                            // [032] see setenv
-                        if (val) fputs(val, stdout); /* unset -> empty */
-                        free(vname);
-                        free(txt);
-                        first = false;
-                        continue;
-                    }
-                }
-                /* Fallback: print raw */
-                fputs(txt, stdout);
-                free(txt);
-                first = false;
-                continue;
-            }
-
-            if (ts_node_symbol(ch) == sym_expansion) {
-                /* ${VAR} -> getenv("VAR") (variable_name is the first named child) */
-                TSNode v = ts_node_named_child(ch, 0);                              // [030-fix]
-                if (!ts_node_is_null(v) && ts_node_symbol(v) == sym_variable_name) {// [030-fix]
-                    char *vname = ts_extract_node_text(input, v);                   // [030-fix]
-                    if (vname) {
-                        if (!first) putchar(' ');
-                        const char *val = getenv(vname);                            // [032] see setenv
-                        if (val) fputs(val, stdout); /* unset -> empty */
-                        free(vname);
-                        first = false;
-                        continue;
-                    }
-                }
-                /* Fallback: raw ${...} text */
-                char *raw = ts_extract_node_text(input, ch);
-                if (raw) {
-                    if (!first) putchar(' ');
-                    fputs(raw, stdout);
-                    free(raw);
-                    first = false;
-                    continue;
-                }
-            }
-            /* ----- end expansions ----- */
-
-            /* Generic print path (plain words, quoted args) */
-            char *text = ts_extract_node_text(input, ch);
-            if (!text) continue;
-
-            if (!first) putchar(' ');
-
-            /* Strip exactly one matching pair of outer quotes, if present. */
-            size_t len = strlen(text);
-            if (len >= 2) {
-                char q = text[0];
-                if ((q == '"' || q == '\'') && text[len - 1] == q) {
-                    fwrite(text + 1, 1, len - 2, stdout);
-                    free(text);
-                    first = false;
-                    continue;
-                }
-            }
-
-            fputs(text, stdout);
-            free(text);
-            first = false;
+            if (!first && out[0] != '\0') putchar(' ');                     // [changed] print separator only if arg non-empty
+            fputs(out, stdout);                                             // [unchanged] print arg exactly as rendered
+            first = first && (out[0] == '\0');                               // [changed] stay in "first" state if arg was empty
+            free(out);
         }
 
         putchar('\n');
         free(cmd);
-        last_status = 0;  /* builtin echo succeeded */
+        last_status = 0;
         return;
     }
     /* ---- end builtin: echo ---- */
 
-    /* -------- externals (022): build argv from plain words, execvp/execv -------- */
+    /* externals (unchanged): words-only argv + execvp/execv */
     uint32_t named = ts_node_named_child_count(command_node);
     int word_argc = 0;
     for (uint32_t i = 0; i < named; i++) {
         TSNode ch = ts_node_named_child(command_node, i);
         if (ts_node_eq(ch, name_node)) continue;
         if (ts_node_symbol(ch) == sym_word) word_argc++;
-        /* TODO: treat quoted/expansion args when tests require. */
     }
 
     char **argv = calloc((size_t)word_argc + 2, sizeof(char *));
     if (!argv) {
         argv = (char **)malloc(2 * sizeof(char *));
         if (!argv) { free(cmd); return; }
-        argv[0] = cmd;
-        argv[1] = NULL;
-        word_argc = 0;
+        argv[0] = cmd; argv[1] = NULL; word_argc = 0;
     } else {
         argv[0] = cmd;
         int idx = 1;
@@ -423,7 +560,6 @@ static void handle_command(TSNode command_node) {
     }
 
     int use_execvp = (strchr(cmd, '/') == NULL);
-
     pid_t pid = fork();
 
     if (pid == 0) {
@@ -431,19 +567,16 @@ static void handle_command(TSNode command_node) {
         else            execv(cmd, argv);
         _exit(127);
     } else {
-        int status;
-        (void)waitpid(pid, &status, 0);
-        if (WIFEXITED(status))      last_status = WEXITSTATUS(status);
+        int status; (void)waitpid(pid, &status, 0);
+        if (WIFEXITED(status))        last_status = WEXITSTATUS(status);
         else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
-        else                        last_status = 1; /* conservative default */
+        else                          last_status = 1;
     }
 
     for (int i = 1; i <= word_argc; i++) free(argv[i]);
     free(argv);
     free(cmd);
 }
-
-
 
 
 

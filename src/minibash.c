@@ -45,6 +45,7 @@ static void handle_child_status(pid_t pid, int status);
 static char *read_script_from_fd(int readfd);
 static void execute_script(char *script);
 
+static int last_status = 0; // [020]
 
 static void
 usage(char *progname)
@@ -258,44 +259,55 @@ static void handle_command(TSNode command_node) {
         return;
     }
 
-    /* ---- builtin: echo — handles plain, "" and '' args ---- */
-    if (strcmp(cmd, "echo") == 0) {                                                     // [015-out]
-        uint32_t n = ts_node_named_child_count(command_node);                           // [015-out]
-        bool first = true;                                                              // [015-out]
+    /* ---- builtin: echo — handles plain/""/'' args and "$?" ---- */
+    if (strcmp(cmd, "echo") == 0) {
+        uint32_t n = ts_node_named_child_count(command_node);
+        bool first = true;
 
-        for (uint32_t i = 0; i < n; i++) {                                              // [015-out]
-            TSNode ch = ts_node_named_child(command_node, i);                           // [015-out]
-            if (ts_node_eq(ch, name_node))                                              // [015-out]
-                continue;                                                               // [015-out]
+        for (uint32_t i = 0; i < n; i++) {
+            TSNode ch = ts_node_named_child(command_node, i);
+            if (ts_node_eq(ch, name_node))
+                continue;
 
-            char *arg = ts_extract_node_text(input, ch);                                // [015-out]
-            if (!arg)                                                                   // [015-out]
-                continue;                                                               // [015-out]
+            char *text = ts_extract_node_text(input, ch);                     // [020]
+            if (!text)                                                        // [020]
+                continue;                                                     // [020]
 
-            size_t len = strlen(arg);                                                   // [015-out]
-            if (!first) putchar(' ');                                                   // [015-out]
+            if (!first) putchar(' ');
 
-            /* Strip exactly one matching pair of outer quotes, if present. */          // [015-out]
-            if (len >= 2) {                                                             // [015-out]
-                char q = arg[0];                                                        // [015-out]
-                if ((q == '"' || q == '\'') && arg[len - 1] == q) {                     // [015-out]
-                    fwrite(arg + 1, 1, len - 2, stdout);                                // [015-out]
-                    free(arg);                                                          // [015-out]
-                    first = false;                                                      // [015-out]
-                    continue;                                                           // [015-out]
-                }                                                                       // [015-out]
-            }                                                                           // [015-out]
+            /* Expand "$?" exactly (Tree-sitter gives this as sym_simple_expansion). */ // [020]
+            if (ts_node_symbol(ch) == sym_simple_expansion && strcmp(text, "$?") == 0) { // [020]
+                char buf[32];                                                            // [020]
+                snprintf(buf, sizeof buf, "%d", last_status);                            // [020]
+                fputs(buf, stdout);                                                      // [020]
+                free(text);                                                              // [020]
+                first = false;                                                           // [020]
+                continue;                                                                // [020]
+            }                                                                            // [020]
 
-            /* No outer quotes — print as-is. */                                        // [015-out]
-            fputs(arg, stdout);                                                         // [015-out]
-            free(arg);                                                                  // [015-out]
-            first = false;                                                              // [015-out]
-        }                                                                               // [015-out]
+            /* Strip exactly one matching pair of outer quotes, if present. */
+            size_t len = strlen(text);
+            if (len >= 2) {
+                char q = text[0];
+                if ((q == '"' || q == '\'') && text[len - 1] == q) {
+                    fwrite(text + 1, 1, len - 2, stdout);
+                    free(text);
+                    first = false;
+                    continue;
+                }
+            }
 
-        putchar('\n');                                                                  // [015-out]
-        free(cmd);                                                                      // [015-out]
-        return;                                                                         // [015-out]
-    }                                                                                   // [015-out]
+            /* No outer quotes — print as-is. */
+            fputs(text, stdout);
+            free(text);
+            first = false;
+        }
+
+        putchar('\n');
+        free(cmd);
+        last_status = 0;                                                       // [020] builtin echo succeeded
+        return;
+    }
     /* ---- end builtin: echo ---- */
 
     /* Use PATH only for the simplest bareword form (no args/redirs), as before */
@@ -323,6 +335,12 @@ static void handle_command(TSNode command_node) {
     } else {
         int status;
         (void)waitpid(pid, &status, 0);
+        if (WIFEXITED(status))                                                // [020]
+            last_status = WEXITSTATUS(status);                                // [020]
+        else if (WIFSIGNALED(status))                                         // [020]
+            last_status = 128 + WTERMSIG(status);                             // [020]
+        else                                                                  // [020]
+            last_status = 1; /* conservative default */                       // [020]
     }
 
     free(cmd);

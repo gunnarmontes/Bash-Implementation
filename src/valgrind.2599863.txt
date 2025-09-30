@@ -1,0 +1,31 @@
+==2599863== Memcheck, a memory error detector
+==2599863== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==2599863== Using Valgrind-3.25.1 and LibVEX; rerun with -h for copyright info
+==2599863== Command: ./minibash ../tests/050-pipeline-1.sh
+==2599863== Parent PID: 2588985
+==2599863== 
+==2599863== 
+==2599863== FILE DESCRIPTORS: 9 open (9 inherited) at exit.
+==2599863== 
+==2599863== HEAP SUMMARY:
+==2599863==     in use at exit: 288 bytes in 3 blocks
+==2599863==   total heap usage: 191 allocs, 188 frees, 21,680 bytes allocated
+==2599863== 
+==2599863== 288 bytes in 3 blocks are definitely lost in loss record 1 of 1
+==2599863==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2599863==    by 0x437C5C: collect_pipeline_commands (minibash.c:619)
+==2599863==    by 0x4338A9: handle_pipeline (minibash.c:684)
+==2599863==    by 0x432730: execute_node (minibash.c:806)
+==2599863==    by 0x43262D: run_program (minibash.c:825)
+==2599863==    by 0x4323CA: execute_script (minibash.c:863)
+==2599863==    by 0x431EB5: main (minibash.c:937)
+==2599863== 
+==2599863== LEAK SUMMARY:
+==2599863==    definitely lost: 288 bytes in 3 blocks
+==2599863==    indirectly lost: 0 bytes in 0 blocks
+==2599863==      possibly lost: 0 bytes in 0 blocks
+==2599863==    still reachable: 0 bytes in 0 blocks
+==2599863==         suppressed: 0 bytes in 0 blocks
+==2599863== 
+==2599863== For lists of detected and suppressed errors, rerun with: -s
+==2599863== ERROR SUMMARY: 1 errors from 1 contexts (suppressed: 0 from 0)

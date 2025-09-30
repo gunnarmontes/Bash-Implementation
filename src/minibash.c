@@ -272,70 +272,89 @@ static void handle_variable_assignment(TSNode assign_node) {            // [032]
     free(vval);                                                          // [032]
     last_status = 0;                                                     // [032]
 }
+  
+// Capture the stdout of a command_substitution node "$( ... )" into a malloc'ed string.
+// Caller must free the returned pointer. Trailing newlines are stripped.
+static char *capture_command_subst(TSNode sub, char *input) {
+    int fds[2];
+    if (pipe(fds) != 0)
+        return strdup("");
 
-// NEW: capture the stdout of a command_substitution node "$( ... )" into a malloc'ed string.  // [040]
-static char *capture_command_subst(TSNode sub, char *input) {                                  // [040]
-    int fds[2];                                                                                // [040]
-    if (pipe(fds) != 0)                                                                        // [040]
-        return strdup("");                                                                     // [040]
-
-    pid_t pid = fork();                                                                        // [040]
+    pid_t pid = fork();
     if (pid == 0) {
-    close(fds[0]);
-    dup2(fds[1], STDOUT_FILENO);
-    close(fds[1]);
+        /* ---------- child: write end ---------- */
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[1]);
 
-    // run the inner command
-    uint32_t m = ts_node_named_child_count(sub);
-    for (uint32_t i = 0; i < m; i++) {
-        TSNode inner = ts_node_named_child(sub, i);
-        if (ts_node_symbol(inner) == sym_command) {
-            handle_command(inner);
-            break;
+        // Find and execute the inner command
+        uint32_t m = ts_node_named_child_count(sub);
+        for (uint32_t i = 0; i < m; i++) {
+            TSNode inner = ts_node_named_child(sub, i);
+            if (ts_node_symbol(inner) == sym_command) {
+                handle_command(inner);
+
+                /* --- NEW: best-effort teardown in the child for clean Valgrind output --- */
+                fflush(NULL);                // flush stdio to the pipe
+
+                if (parser) {                // free Tree-sitter parser in child
+                    ts_parser_delete(parser);
+                    parser = NULL;
+                }
+
+                // free the shell variable table in child (mirrors main() teardown)
+                tommy_hashdyn_foreach(&shell_vars, hash_free);
+                tommy_hashdyn_done(&shell_vars);
+
+                if (input) {                 // free script buffer copy
+                    free(input);
+                    input = NULL;
+                }
+                /* --- END NEW --- */
+
+                break;
+            }
         }
+        _exit(0);
     }
 
-    fflush(NULL);          // <-- ensure stdio buffers are flushed
-    _exit(0);              // keep _exit (don’t run atexit handlers in child)
+    /* ---------- parent: read from pipe ---------- */
+    close(fds[1]);
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    char tmp[4096];
+    ssize_t n;
+
+    while ((n = read(fds[0], tmp, sizeof tmp)) > 0) {
+        if (len + (size_t)n + 1 > cap) {
+            size_t newcap = cap ? cap : 64;
+            while (len + (size_t)n + 1 > newcap) newcap *= 2;
+            char *t = realloc(buf, newcap);
+            if (!t) {
+                free(buf);
+                close(fds[0]);
+                (void)waitpid(pid, NULL, 0);
+                return strdup("");
+            }
+            buf = t;
+            cap = newcap;
+        }
+        memcpy(buf + len, tmp, (size_t)n);
+        len += (size_t)n;
+        buf[len] = '\0';
+    }
+    close(fds[0]);
+    (void)waitpid(pid, NULL, 0);
+
+    if (!buf) return strdup("");
+
+    // Trim trailing newlines (bash behavior)
+    while (len > 0 && buf[len - 1] == '\n') {
+        buf[--len] = '\0';
+    }
+    return buf;
 }
-
-
-    // Parent: read all bytes from pipe                                                        // [040]
-    close(fds[1]);                                                                             // [040]
-    char *buf = NULL;                                                                          // [040]
-    size_t len = 0, cap = 0;                                                                   // [040]
-    char tmp[4096];                                                                            // [040]
-    ssize_t n;                                                                                 // [040]
-    while ((n = read(fds[0], tmp, sizeof tmp)) > 0) {                                          // [040]
-        // reuse your append_bytes helper if present                                           // [040]
-        if (len + (size_t)n + 1 > cap) {                                                       // [040]
-            size_t newcap = cap ? cap : 64;                                                    // [040]
-            while (len + (size_t)n + 1 > newcap) newcap *= 2;                                  // [040]
-            char *t = realloc(buf, newcap);                                                    // [040]
-            if (!t) {                                                                          // [040]
-                free(buf);                                                                      // [040]
-                close(fds[0]);                                                                  // [040]
-                (void)waitpid(pid, NULL, 0);                                                    // [040]
-                return strdup("");                                                              // [040]
-            }                                                                                  // [040]
-            buf = t;                                                                            // [040]
-            cap = newcap;                                                                       // [040]
-        }                                                                                      // [040]
-        memcpy(buf + len, tmp, (size_t)n);                                                     // [040]
-        len += (size_t)n;                                                                       // [040]
-        buf[len] = '\0';                                                                        // [040]
-    }
-    close(fds[0]);                                                                             // [040]
-    (void)waitpid(pid, NULL, 0);                                                               // [040]
-
-    if (!buf) return strdup("");                                                               // [040]
-
-    // Trim all trailing newlines per bash behavior                                            // [040]
-    while (len > 0 && buf[len - 1] == '\n') {                                                  // [040]
-        buf[--len] = '\0';                                                                     // [040]
-    }
-    return buf;                                                                                // [040]
-}                                                                                              // [040]
+// [040]
 
 
 // NEW: expand a simple parameter expansion ($?, $$, $VAR) to a malloc'ed string.
@@ -579,6 +598,174 @@ static void handle_command(TSNode command_node) {
 }
 
 
+/* --- helper: collect all command nodes in a pipeline --- */
+static int collect_pipeline_commands(TSNode pipeline, TSNode **out_cmds) {
+    int total_named = (int) ts_node_named_child_count(pipeline);
+
+    /* First pass: count command children */
+    int ncmds = 0;
+    for (int i = 0; i < total_named; i++) {
+        TSNode ch = ts_node_named_child(pipeline, (uint32_t)i);
+        if (ts_node_symbol(ch) == sym_command)
+            ncmds++;
+    }
+
+    if (ncmds == 0) {
+        *out_cmds = NULL;
+        return 0;
+    }
+
+    /* Second pass: collect them */
+    TSNode *cmds = malloc((size_t)ncmds * sizeof *cmds);
+    if (!cmds) {
+        *out_cmds = NULL;
+        return -1;                  /* signal OOM to caller */
+    }
+
+    int j = 0;
+    for (int i = 0; i < total_named; i++) {
+        TSNode ch = ts_node_named_child(pipeline, (uint32_t)i);
+        if (ts_node_symbol(ch) == sym_command)
+            cmds[j++] = ch;         /* TSNode is a small struct; copy by value */
+    }
+
+    *out_cmds = cmds;
+    return ncmds;
+}
+
+/* --- helper: build argv from a command node (include command_name->word) --- */
+static char **build_argv_words_only(TSNode command, char *input) {
+    /* name: command_name -> word */
+    TSNode name_node = ts_node_child_by_field_id(command, nameId);
+    if (ts_node_is_null(name_node)) return NULL;
+
+    TSNode name_word = ts_node_named_child(name_node, 0);
+    if (ts_node_is_null(name_word) || ts_node_symbol(name_word) != sym_word)
+        return NULL;
+
+    /* count argv: 1 for the program name + each argument that is a plain word */
+    uint32_t named = ts_node_named_child_count(command);
+    int argc = 1;  // for program name
+    for (uint32_t i = 0; i < named; i++) {
+        TSNode ch = ts_node_named_child(command, i);
+        if (ts_node_symbol(ch) == sym_word) argc++;
+    }
+
+    char **argv = calloc((size_t)argc + 1, sizeof *argv);
+    if (!argv) return NULL;
+
+    /* argv[0] = program name text */
+    argv[0] = ts_extract_node_text(input, name_word);
+    if (!argv[0]) { free(argv); return NULL; }
+
+    /* append each argument word (top-level word children of the command) */
+    int k = 1;
+    for (uint32_t i = 0; i < named; i++) {
+        TSNode ch = ts_node_named_child(command, i);
+        if (ts_node_symbol(ch) != sym_word) continue;
+        char *w = ts_extract_node_text(input, ch);
+        if (!w) w = strdup("");
+        argv[k++] = w;
+    }
+    argv[k] = NULL;
+    return argv;
+}
+
+/* --- helper: free argv allocated by build_argv_words_only --- */
+static void free_argv(char **argv) {
+    if (!argv) return;
+    for (int i = 0; argv[i]; i++) free(argv[i]);
+    free(argv);
+}
+
+static void handle_pipeline(TSNode pipeline_node) {
+    TSNode *cmds = NULL;
+    int ncmds = collect_pipeline_commands(pipeline_node, &cmds);
+    if (ncmds <= 0) return;
+
+    char ***argvs = calloc((size_t)ncmds, sizeof *argvs);
+    if (!argvs) { free(cmds); return; }
+
+    for (int i = 0; i < ncmds; i++) {
+        argvs[i] = build_argv_words_only(cmds[i], input);
+        if (!argvs[i] || !argvs[i][0]) {
+            for (int j = 0; j <= i; j++) free_argv(argvs[j]);
+            free(argvs);
+            free(cmds);
+            return;
+        }
+    }
+
+    int (*pipes)[2] = NULL;
+    if (ncmds > 1) {
+        pipes = calloc((size_t)(ncmds - 1), sizeof *pipes);
+        if (!pipes) {
+            for (int i = 0; i < ncmds; i++) free_argv(argvs[i]);
+            free(argvs); free(cmds);
+            return;
+        }
+        for (int i = 0; i < ncmds - 1; i++) {
+            if (pipe(pipes[i]) != 0) {
+                for (int j = 0; j < i; j++) { close(pipes[j][0]); close(pipes[j][1]); }
+                for (int k = 0; k < ncmds; k++) free_argv(argvs[k]);
+                free(pipes); free(argvs); free(cmds);
+                return;
+            }
+        }
+    }
+
+    pid_t *pids = calloc((size_t)ncmds, sizeof *pids);
+    if (!pids) {
+        if (pipes) {
+            for (int i = 0; i < ncmds - 1; i++) { close(pipes[i][0]); close(pipes[i][1]); }
+            free(pipes);
+        }
+        for (int i = 0; i < ncmds; i++) free_argv(argvs[i]);
+        free(argvs); free(cmds);
+        return;
+    }
+
+    for (int i = 0; i < ncmds; i++) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (i > 0)          dup2(pipes[i-1][0], STDIN_FILENO);
+            if (i < ncmds - 1)  dup2(pipes[i][1], STDOUT_FILENO);
+            if (pipes) {
+                for (int j = 0; j < ncmds - 1; j++) { close(pipes[j][0]); close(pipes[j][1]); }
+            }
+            execvp(argvs[i][0], argvs[i]);
+            _exit(127);
+        } else if (pid > 0) {
+            pids[i] = pid;
+        } else {
+            /* fork failed: best-effort cleanup */
+        }
+    }
+
+    if (pipes) {
+        for (int i = 0; i < ncmds - 1; i++) { close(pipes[i][0]); close(pipes[i][1]); }
+        free(pipes);
+    }
+
+    for (int i = 0; i < ncmds; i++) free_argv(argvs[i]);
+    free(argvs);
+
+    for (int i = 0; i < ncmds; i++) {
+        int st;
+        (void)waitpid(pids[i], &st, 0);
+        if (i == ncmds - 1) {
+            if (WIFEXITED(st)) last_status = WEXITSTATUS(st);
+            else if (WIFSIGNALED(st)) last_status = 128 + WTERMSIG(st);
+            else last_status = 1;
+        }
+    }
+    free(pids);
+
+    /* FIX: free the cmds array we allocated */
+    free(cmds);
+}
+
+
 
 static void execute_node(TSNode child) {
 
@@ -592,6 +779,9 @@ static void execute_node(TSNode child) {
             break;  
         case sym_command:
             handle_command(child);
+            break;
+        case sym_pipeline:
+            handle_pipeline(child);
             break;
         default:
             ts_print_node_info(child, "Unimplemented node");

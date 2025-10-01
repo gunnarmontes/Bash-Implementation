@@ -1,0 +1,265 @@
+==2607523== Memcheck, a memory error detector
+==2607523== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==2607523== Using Valgrind-3.25.1 and LibVEX; rerun with -h for copyright info
+==2607523== Command: ./minibash ../tests/060-pipeline-redirect1.sh
+==2607523== Parent PID: 2607505
+==2607523== 
+==2607523== 
+==2607523== FILE DESCRIPTORS: 10 open (8 inherited) at exit.
+==2607523== Open file descriptor 3: .inputfile
+==2607523==    at 0x4AD2F4B: open (open64.c:48)
+==2607523==    by 0x434005: handle_redirected_statement (minibash.c:1095)
+==2607523==    by 0x432767: execute_node (minibash.c:1154)
+==2607523==    by 0x43264D: run_program (minibash.c:1176)
+==2607523==    by 0x4323EA: execute_script (minibash.c:1214)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== Open file descriptor 1: /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/.inputfile
+==2607523==    at 0x4AD3A2B: dup2 (syscall-template.S:120)
+==2607523==    by 0x43894E: run_command_with_io (minibash.c:969)
+==2607523==    by 0x4343FE: handle_redirected_statement (minibash.c:1120)
+==2607523==    by 0x432767: execute_node (minibash.c:1154)
+==2607523==    by 0x43264D: run_program (minibash.c:1176)
+==2607523==    by 0x4323EA: execute_script (minibash.c:1214)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 
+==2607523== HEAP SUMMARY:
+==2607523==     in use at exit: 10,318 bytes in 73 blocks
+==2607523==   total heap usage: 95 allocs, 22 frees, 13,620 bytes allocated
+==2607523== 
+==2607523== 24 bytes in 1 blocks are still reachable in loss record 1 of 27
+==2607523==    at 0x484E428: realloc (vg_replace_malloc.c:1801)
+==2607523==    by 0x4D2E99: ts_realloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4D5737: ts_lexer_init (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4DE5: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 24 bytes in 1 blocks are still reachable in loss record 2 of 27
+==2607523==    at 0x484E214: calloc (vg_replace_malloc.c:1675)
+==2607523==    by 0x4D2E50: ts_calloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CEEB7: ts_tree_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C6EA5: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 32 bytes in 1 blocks are still reachable in loss record 3 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CEE90: ts_tree_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C6EA5: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 64 bytes in 1 blocks are still reachable in loss record 4 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E1B: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 64 bytes in 1 blocks are still reachable in loss record 5 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CDBCE: ts_subtree_compare (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C06E7: ts_parser__select_tree (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C5A49: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 80 bytes in 1 blocks are still reachable in loss record 6 of 27
+==2607523==    at 0x484E214: calloc (vg_replace_malloc.c:1675)
+==2607523==    by 0x4D2E50: ts_calloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CA949: ts_stack_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E61: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 80 bytes in 1 blocks are still reachable in loss record 7 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CC3C6: ts_subtree_new_leaf (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C18E6: ts_parser__lex (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C56ED: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 80 bytes in 1 blocks are possibly lost in loss record 8 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CC3C6: ts_subtree_new_leaf (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C1FC5: ts_parser__lex (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C56ED: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 80 bytes in 1 blocks are possibly lost in loss record 9 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CC3C6: ts_subtree_new_leaf (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C18E6: ts_parser__lex (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C56ED: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 96 bytes in 1 blocks are still reachable in loss record 10 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CAABF: ts_stack_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E61: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 96 bytes in 1 blocks are still reachable in loss record 11 of 27
+==2607523==    at 0x484E214: calloc (vg_replace_malloc.c:1675)
+==2607523==    by 0x4D2E50: ts_calloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CBF19: ts_subtree_array_copy (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C8A37: stack__iter (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C992B: ts_stack_pop_count (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C58F5: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 96 bytes in 1 blocks are still reachable in loss record 12 of 27
+==2607523==    at 0x484E428: realloc (vg_replace_malloc.c:1801)
+==2607523==    by 0x4D2E99: ts_realloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CD178: ts_subtree_new_node (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C2646: ts_parser__select_children (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C5A49: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 96 bytes in 1 blocks are possibly lost in loss record 13 of 27
+==2607523==    at 0x484E428: realloc (vg_replace_malloc.c:1801)
+==2607523==    by 0x4D2E99: ts_realloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CD178: ts_subtree_new_node (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C23D5: ts_parser__accept (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C636D: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 110 bytes in 1 blocks are still reachable in loss record 14 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x43213C: read_script_from_fd (minibash.c:1193)
+==2607523==    by 0x431EA4: main (minibash.c:1282)
+==2607523== 
+==2607523== 128 bytes in 1 blocks are still reachable in loss record 15 of 27
+==2607523==    at 0x484E214: calloc (vg_replace_malloc.c:1675)
+==2607523==    by 0x4D5DA2: tommy_hashdyn_init (tommyhashdyn.c:40)
+==2607523==    by 0x43192F: main (minibash.c:1223)
+==2607523== 
+==2607523== 128 bytes in 1 blocks are still reachable in loss record 16 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CAACF: ts_stack_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E61: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 192 bytes in 1 blocks are still reachable in loss record 17 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CA99A: ts_stack_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E61: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 192 bytes in 2 blocks are possibly lost in loss record 18 of 27
+==2607523==    at 0x484E214: calloc (vg_replace_malloc.c:1675)
+==2607523==    by 0x4D2E50: ts_calloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CBF19: ts_subtree_array_copy (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C8A37: stack__iter (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C992B: ts_stack_pop_count (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C58F5: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 232 bytes in 1 blocks are still reachable in loss record 19 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CAA9F: ts_stack_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E61: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 240 bytes in 3 blocks are still reachable in loss record 20 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CC3C6: ts_subtree_new_leaf (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C1FC5: ts_parser__lex (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C56ED: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 256 bytes in 1 blocks are still reachable in loss record 21 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CC1C0: ts_subtree_pool_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E3C: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 400 bytes in 1 blocks are still reachable in loss record 22 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4CAAAF: ts_stack_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4E61: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 464 bytes in 5 blocks are still reachable in loss record 23 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C8946: stack__iter (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C992B: ts_stack_pop_count (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C58F5: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 1,160 bytes in 5 blocks are still reachable in loss record 24 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C96E7: ts_stack_push (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C709C: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 1,512 bytes in 1 blocks are still reachable in loss record 25 of 27
+==2607523==    at 0x484E214: calloc (vg_replace_malloc.c:1675)
+==2607523==    by 0x4D2E50: ts_calloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C4DDA: ts_parser_new (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4319DA: main (minibash.c:1235)
+==2607523== 
+==2607523== 1,624 bytes in 7 blocks are still reachable in loss record 26 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C96E7: ts_stack_push (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C5B37: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== 2,768 bytes in 30 blocks are possibly lost in loss record 27 of 27
+==2607523==    at 0x484682F: malloc (vg_replace_malloc.c:446)
+==2607523==    by 0x4D2E09: ts_malloc_default (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C8946: stack__iter (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C992B: ts_stack_pop_count (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C58F5: ts_parser_parse (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4C7C72: ts_parser_parse_string_encoding (in /home/ugrads/majors/gunnarmontes/CS3214/proj1/prefork/minibash/src/minibash)
+==2607523==    by 0x4323A4: execute_script (minibash.c:1211)
+==2607523==    by 0x431ED5: main (minibash.c:1288)
+==2607523== 
+==2607523== LEAK SUMMARY:
+==2607523==    definitely lost: 0 bytes in 0 blocks
+==2607523==    indirectly lost: 0 bytes in 0 blocks
+==2607523==      possibly lost: 3,216 bytes in 35 blocks
+==2607523==    still reachable: 7,102 bytes in 38 blocks
+==2607523==         suppressed: 0 bytes in 0 blocks
+==2607523== 
+==2607523== For lists of detected and suppressed errors, rerun with: -s
+==2607523== ERROR SUMMARY: 7 errors from 7 contexts (suppressed: 0 from 0)

@@ -1,0 +1,6 @@
+==2607525== Memcheck, a memory error detector
+==2607525== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==2607525== Using Valgrind-3.25.1 and LibVEX; rerun with -h for copyright info
+==2607525== Command: ./minibash ../tests/060-pipeline-redirect1.sh
+==2607525== Parent PID: 2607505
+==2607525== 

@@ -1,0 +1,15 @@
+==2609354== Memcheck, a memory error detector
+==2609354== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==2609354== Using Valgrind-3.25.1 and LibVEX; rerun with -h for copyright info
+==2609354== Command: ./minibash ../tests/060-pipeline-redirect1.sh
+==2609354== Parent PID: 2588985
+==2609354== 
+==2609354== 
+==2609354== HEAP SUMMARY:
+==2609354==     in use at exit: 0 bytes in 0 blocks
+==2609354==   total heap usage: 104 allocs, 104 frees, 11,874 bytes allocated
+==2609354== 
+==2609354== All heap blocks were freed -- no leaks are possible
+==2609354== 
+==2609354== For lists of detected and suppressed errors, rerun with: -s
+==2609354== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

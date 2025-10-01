@@ -15,8 +15,11 @@ CFLAGS=-Wmissing-prototypes $(BASE_CFLAGS)
 #CFLAGS=-Wall -Werror -g -O2 -fsanitize=undefined -I${TREE_SITTER_DIR}/lib/include
 
 TREE_SITTER_OBJECTS=parser.o scanner.o
-OBJECTS=signal_support.o list.o utils.o
+
+# --- begin: updated to include expand.o / expand.h ---
+OBJECTS=signal_support.o list.o utils.o expand.o
 HEADERS=$(patsubst %.o,%.h,$(OBJECTS))
+# --- end: updated to include expand.o / expand.h ---
 
 default: minibash
 
@@ -31,4 +34,3 @@ minibash: $(OBJECTS) $(TREE_SITTER_OBJECTS) minibash.o $(HEADERS)
 clean:
 	rm -f $(OBJECTS) $(TREE_SITTER_OBJECTS) minibash minibash.o \
 		core.*
-

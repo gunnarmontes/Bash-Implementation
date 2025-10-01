@@ -1,0 +1,15 @@
+==2609374== Memcheck, a memory error detector
+==2609374== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.
+==2609374== Using Valgrind-3.25.1 and LibVEX; rerun with -h for copyright info
+==2609374== Command: /usr/bin/cat
+==2609374== Parent PID: 2609354
+==2609374== 
+==2609374== 
+==2609374== HEAP SUMMARY:
+==2609374==     in use at exit: 0 bytes in 0 blocks
+==2609374==   total heap usage: 417 allocs, 417 frees, 4,227,092 bytes allocated
+==2609374== 
+==2609374== All heap blocks were freed -- no leaks are possible
+==2609374== 
+==2609374== For lists of detected and suppressed errors, rerun with: -s
+==2609374== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

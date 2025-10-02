@@ -74,6 +74,12 @@ static int  apply_command_redirections(TSNode command_node);
 static void exec_command_in_child(TSNode command_node);
 static int  run_pipeline_with_io(TSNode pipeline_node, int pipe_in_fd, int pipe_out_fd);
 
+static void handle_redirected_statement(TSNode rs);
+
+static int eval_node_status(TSNode n);
+static int eval_andor(TSNode andor_node);
+
+
 static int last_status = 0; // [020]
 
 static void
@@ -442,6 +448,7 @@ static char **build_argv_words_only(TSNode command, char *input) {
     return argv;
 }
 
+
 static void handle_pipeline(TSNode pipeline_node) {
     TSNode *cmds = NULL;
     int ncmds = collect_pipeline_commands(pipeline_node, &cmds);
@@ -752,6 +759,148 @@ static int apply_command_redirections(TSNode command_node) {
 }
 
 
+static int eval_node_status(TSNode n) {
+    switch (ts_node_symbol(n)) {
+        case sym_command:
+            handle_command(n);
+            return last_status;
+
+        case sym_pipeline:
+            (void)run_pipeline_with_io(n, -1, -1);
+            return last_status;
+
+        case sym_redirected_statement:
+            handle_redirected_statement(n);
+            return last_status;
+
+        case sym_list: {
+    uint32_t m = ts_node_named_child_count(n);
+    if (m == 0) { last_status = 0; return last_status; }
+
+    /* Evaluate the first chunk. */
+    TSNode prev = ts_node_named_child(n, 0);
+    int status = eval_node_status(prev);
+
+    /* Walk the rest, inspecting the operator text between prev and cur. */
+    for (uint32_t i = 1; i < m; i++) {
+        TSNode cur = ts_node_named_child(n, i);
+
+        uint32_t prev_end  = ts_node_end_byte(prev);
+        uint32_t cur_start = ts_node_start_byte(cur);
+        const char *seg    = input + prev_end;
+        size_t seglen      = (cur_start > prev_end) ? (size_t)(cur_start - prev_end) : 0;
+
+        /* Find the operator between prev and cur: &&, ||, ;, & (ignore whitespace/newlines). */
+        const char *p = seg, *pend = seg + seglen;
+        int is_and = 0, is_or = 0, is_semi = 0, is_bg = 0;
+        while (p < pend) {
+            if (p + 1 < pend && p[0] == '&' && p[1] == '&') { is_and = 1; break; }
+            if (p + 1 < pend && p[0] == '|' && p[1] == '|') { is_or  = 1; break; }
+            if (*p == ';') { is_semi = 1; break; }
+            if (*p == '&') { is_bg   = 1; break; }  /* not fully implemented here */
+            p++;
+        }
+
+        /* Decide whether to run the right child based on the operator. */
+        int run_right = 1;
+        if (is_and)      run_right = (status == 0);
+        else if (is_or)  run_right = (status != 0);
+        else if (is_semi || is_bg) run_right = 1;  /* sequencing */
+
+        if (run_right) {
+            status = eval_node_status(cur);
+        } else {
+            /* short-circuited: keep previous status; skip cur */
+        }
+
+        prev = cur;
+    }
+
+    last_status = status;
+    return last_status;
+}
+
+
+        /* If your generated headers have an explicit sym_and_or, prefer it. */
+#ifdef sym_and_or
+        case sym_and_or:
+            return eval_andor(n);
+#endif
+
+#ifdef sym_subshell
+        case sym_subshell: {
+            uint32_t m = ts_node_named_child_count(n);
+            for (uint32_t i = 0; i < m; i++) {
+                TSNode ch = ts_node_named_child(n, i);
+                execute_node(ch);
+            }
+            return last_status;
+        }
+#endif
+
+        /* Some grammars represent &&/|| as a binary_expression with fields. */
+#ifdef sym_binary_expression
+        case sym_binary_expression:
+            return eval_andor(n);
+#endif
+
+        default: {
+            /* Fallback: if the node has an operator field, treat it as and/or. */
+            TSNode opn = ts_node_child_by_field_id(n, operatorId);
+            if (!ts_node_is_null(opn)) {
+                return eval_andor(n);
+            }
+            ts_print_node_info(n, "eval_node_status: unimplemented node");
+            last_status = 1;
+            return last_status;
+        }
+    }
+}
+
+
+static int eval_andor(TSNode andor_node) {
+    uint32_t npipes = ts_node_named_child_count(andor_node);
+    if (npipes == 0) { last_status = 0; return last_status; }
+
+    /* Evaluate the first pipeline. */
+    TSNode left = ts_node_named_child(andor_node, 0);
+    int status = eval_node_status(left);
+
+    /* Walk the rest, respecting &&/|| short-circuit. */
+    for (uint32_t i = 1; i < npipes; i++) {
+        TSNode prev = ts_node_named_child(andor_node, i - 1);
+        TSNode cur  = ts_node_named_child(andor_node, i);
+
+        /* Slice text between prev and cur to discover the operator. */
+        uint32_t prev_end  = ts_node_end_byte(prev);
+        uint32_t cur_start = ts_node_start_byte(cur);
+        const char *seg    = input + prev_end;
+        size_t seglen      = (cur_start > prev_end) ? (size_t)(cur_start - prev_end) : 0;
+
+        /* Scan for "&&" or "||" ignoring whitespace. */
+        const char *p = seg, *pend = seg + seglen;
+        int is_and = 0, is_or = 0;
+        while (p + 1 < pend) {
+            if (p[0] == '&' && p[1] == '&') { is_and = 1; break; }
+            if (p[0] == '|' && p[1] == '|') { is_or  = 1; break; }
+            ++p;
+        }
+
+        int run_right = 1; /* default: sequence if no operator found */
+        if (is_and) run_right = (status == 0);
+        else if (is_or) run_right = (status != 0);
+
+        if (run_right) {
+            status = eval_node_status(cur);  /* update with right status */
+        } else {
+            /* short-circuited: keep prior status, skip cur */
+        }
+    }
+
+    last_status = status;
+    return last_status;
+}
+
 
 /* Handle: redirected_statement := (body: command|pipeline) (file_redirect ...)+ */
 static void handle_redirected_statement(TSNode rs)
@@ -847,29 +996,57 @@ static void handle_redirected_statement(TSNode rs)
 
 
 static void execute_node(TSNode child) {
-
     switch (ts_node_symbol(child)) {
-
         case sym_comment:
             break;
-        
-        case sym_variable_assignment:          // [032]
-            handle_variable_assignment(child); // [032]
-            break;  
+
+        case sym_variable_assignment:
+            handle_variable_assignment(child);
+            break;
+
+        /* NEW: handle top-level list nodes */
+        case sym_list:
+            (void)eval_node_status(child);   /* updates last_status */
+            break;
+
+        /* NEW: handle explicit and_or nodes if your grammar exposes it */
+#ifdef sym_and_or
+        case sym_and_or:
+            (void)eval_andor(child);         /* updates last_status */
+            break;
+#endif
+
+#ifdef sym_binary_expression
+        case sym_binary_expression:          /* Some grammars use this for &&/|| */
+            (void)eval_andor(child);
+            break;
+#endif
+
         case sym_command:
             handle_command(child);
             break;
+
         case sym_redirected_statement:
             handle_redirected_statement(child);
             break;
+
         case sym_pipeline:
             handle_pipeline(child);
             break;
-        default:
+
+        default: {
+            /* If there’s an operator field we can still treat it like and/or */
+            TSNode opn = ts_node_child_by_field_id(child, operatorId);
+            if (!ts_node_is_null(opn)) {
+                (void)eval_andor(child);
+                break;
+            }
             ts_print_node_info(child, "Unimplemented node");
             break;
+        }
     }
 }
+
 /*
  * Run a program.
  *

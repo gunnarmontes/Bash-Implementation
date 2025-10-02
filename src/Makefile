@@ -17,7 +17,7 @@ CFLAGS=-Wmissing-prototypes $(BASE_CFLAGS)
 TREE_SITTER_OBJECTS=parser.o scanner.o
 
 # --- begin: updated to include expand.o / expand.h ---
-OBJECTS=signal_support.o list.o utils.o expand.o
+OBJECTS=signal_support.o list.o utils.o expand.o piping.o
 HEADERS=$(patsubst %.o,%.h,$(OBJECTS))
 # --- end: updated to include expand.o / expand.h ---
 

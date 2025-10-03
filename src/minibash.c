@@ -79,6 +79,17 @@ static void handle_redirected_statement(TSNode rs);
 static int eval_node_status(TSNode n);
 static int eval_andor(TSNode andor_node);
 
+static int eval_if_statement(TSNode if_node);
+
+
+/* prototypes */
+static TSNode unwrap_else_body(TSNode n);   /* <-- add this line */
+
+static int   eval_test_command(TSNode test_cmd);
+static TSNode unwrap_else_body(TSNode n); 
+
+static int  eval_for_statement(TSNode for_node);
+
 
 static int last_status = 0; // [020]
 
@@ -350,6 +361,12 @@ static void handle_command(TSNode command_node) {
         return;
     }
 
+    if (strcmp(argv[0], ":") == 0) {
+        free_argv(argv);
+        last_status = 0;
+        return;
+    }
+
     /* External command */
     pid_t pid = fork();
     if (pid == 0) {
@@ -567,6 +584,12 @@ static void exec_command_in_child(TSNode command_node) {
         _exit(0);
     }
 
+     if (strcmp(argv[0], ":") == 0) {
+        free_argv(argv);
+        _exit(0);
+    }
+
+
     /* external */
     if (strchr(argv[0], '/') == NULL) {
         execvp(argv[0], argv);
@@ -773,52 +796,94 @@ static int eval_node_status(TSNode n) {
             handle_redirected_statement(n);
             return last_status;
 
+        case sym_else_clause: {
+            TSNode body = unwrap_else_body(n);
+            if (!ts_node_is_null(body))
+                return eval_node_status(body);  /* recurse into the real body */
+            last_status = 0;                    /* empty else: success */
+            return last_status;
+        }
+
+        case sym_test_command:
+            return eval_test_command(n);
+
+        case sym_elif_clause: {
+            /* Should normally be handled inside eval_if_statement.
+               If we get here, just evaluate it like a mini if: first named child is test, second is body. */
+            uint32_t k = ts_node_named_child_count(n);
+            TSNode c = (k >= 1) ? ts_node_named_child(n, 0) : (TSNode){0};
+            TSNode b = (k >= 2) ? ts_node_named_child(n, 1) : (TSNode){0};
+            if (!ts_node_is_null(c)) (void)eval_node_status(c);
+            if (last_status == 0 && !ts_node_is_null(b)) (void)eval_node_status(b);
+            return last_status;
+        }
+
+        case sym_variable_assignment:
+            /* Reuse the same handler you already use at top-level so that
+               assignments inside if/elif/else actually take effect. */
+            handle_variable_assignment(n);
+            return last_status;
+
         case sym_list: {
-    uint32_t m = ts_node_named_child_count(n);
-    if (m == 0) { last_status = 0; return last_status; }
+            uint32_t m = ts_node_named_child_count(n);
+            if (m == 0) { last_status = 0; return last_status; }
 
-    /* Evaluate the first chunk. */
-    TSNode prev = ts_node_named_child(n, 0);
-    int status = eval_node_status(prev);
+            /* Evaluate the first chunk. */
+            TSNode prev = ts_node_named_child(n, 0);
+            int status = eval_node_status(prev);
 
-    /* Walk the rest, inspecting the operator text between prev and cur. */
-    for (uint32_t i = 1; i < m; i++) {
-        TSNode cur = ts_node_named_child(n, i);
+            /* Walk the rest, inspecting the operator text between prev and cur. */
+            for (uint32_t i = 1; i < m; i++) {
+                TSNode cur = ts_node_named_child(n, i);
 
-        uint32_t prev_end  = ts_node_end_byte(prev);
-        uint32_t cur_start = ts_node_start_byte(cur);
-        const char *seg    = input + prev_end;
-        size_t seglen      = (cur_start > prev_end) ? (size_t)(cur_start - prev_end) : 0;
+                uint32_t prev_end  = ts_node_end_byte(prev);
+                uint32_t cur_start = ts_node_start_byte(cur);
+                const char *seg    = input + prev_end;
+                size_t seglen      = (cur_start > prev_end) ? (size_t)(cur_start - prev_end) : 0;
 
-        /* Find the operator between prev and cur: &&, ||, ;, & (ignore whitespace/newlines). */
-        const char *p = seg, *pend = seg + seglen;
-        int is_and = 0, is_or = 0, is_semi = 0, is_bg = 0;
-        while (p < pend) {
-            if (p + 1 < pend && p[0] == '&' && p[1] == '&') { is_and = 1; break; }
-            if (p + 1 < pend && p[0] == '|' && p[1] == '|') { is_or  = 1; break; }
-            if (*p == ';') { is_semi = 1; break; }
-            if (*p == '&') { is_bg   = 1; break; }  /* not fully implemented here */
-            p++;
+                /* Find the operator between prev and cur: &&, ||, ;, & (ignore whitespace/newlines). */
+                const char *p = seg, *pend = seg + seglen;
+                int is_and = 0, is_or = 0, is_semi = 0, is_bg = 0;
+                while (p < pend) {
+                    if (p + 1 < pend && p[0] == '&' && p[1] == '&') { is_and = 1; break; }
+                    if (p + 1 < pend && p[0] == '|' && p[1] == '|') { is_or  = 1; break; }
+                    if (*p == ';') { is_semi = 1; break; }
+                    if (*p == '&') { is_bg   = 1; break; }  /* not fully implemented here */
+                    p++;
+                }
+
+                /* Decide whether to run the right child based on the operator. */
+                int run_right = 1;
+                if (is_and)      run_right = (status == 0);
+                else if (is_or)  run_right = (status != 0);
+                else if (is_semi || is_bg) run_right = 1;  /* sequencing */
+
+                if (run_right) {
+                    status = eval_node_status(cur);
+                } else {
+                    /* short-circuited: keep previous status; skip cur */
+                }
+
+                prev = cur;
+            }
+
+            last_status = status;
+            return last_status;
         }
 
-        /* Decide whether to run the right child based on the operator. */
-        int run_right = 1;
-        if (is_and)      run_right = (status == 0);
-        else if (is_or)  run_right = (status != 0);
-        else if (is_semi || is_bg) run_right = 1;  /* sequencing */
-
-        if (run_right) {
-            status = eval_node_status(cur);
-        } else {
-            /* short-circuited: keep previous status; skip cur */
+#ifdef sym_do_group
+    case sym_do_group: {
+        uint32_t m = ts_node_named_child_count(n);
+        int status = 0;
+        for (uint32_t i = 0; i < m; i++) {
+            TSNode ch = ts_node_named_child(n, i);
+            status = eval_node_status(ch);
         }
-
-        prev = cur;
+        last_status = status;
+        return last_status;
     }
+#endif
 
-    last_status = status;
-    return last_status;
-}
 
 
         /* If your generated headers have an explicit sym_and_or, prefer it. */
@@ -994,30 +1059,265 @@ static void handle_redirected_statement(TSNode rs)
     last_status = rc;
 }
 
+/* Evaluate: test_command → unary_expression.
+ * Supports common unary ops used by the tests:
+ *   -e (exists), -f (regular file), -d (directory),
+ *   -r (readable), -w (writable), -x (executable),
+ *   -n (string length > 0), -z (string length == 0).
+ * Returns 0 on true, 1 on false.
+ */
+static int eval_test_command(TSNode test_cmd) {
+    /* Locate unary_expression child */
+    TSNode ue = (TSNode){0};
+    uint32_t n = ts_node_named_child_count(test_cmd);
+    for (uint32_t i = 0; i < n; i++) {
+        TSNode ch = ts_node_named_child(test_cmd, i);
+        if (strcmp(ts_node_type(ch), "unary_expression") == 0) { ue = ch; break; }
+    }
+    if (ts_node_is_null(ue)) { last_status = 1; return last_status; }
+
+    /* Operator text (e.g., "-x", "-e", "-n", "-z", ...) */
+    TSNode opn = ts_node_child_by_field_id(ue, operatorId);
+    char *op = ts_extract_node_text(input, opn);
+    if (!op) op = strdup("");
+
+    /* Operand node: could be word/string/raw_string/simple_expansion/expansion */
+    TSNode argn = (TSNode){0};
+    uint32_t m = ts_node_named_child_count(ue);
+    for (uint32_t i = 0; i < m; i++) {
+        TSNode ch = ts_node_named_child(ue, i);
+        int s = ts_node_symbol(ch);
+        if (s == sym_word || s == sym_string || s == sym_raw_string ||
+            s == sym_simple_expansion || s == sym_expansion || s == sym_command_substitution) {
+            argn = ch; break;
+        }
+    }
+
+    /* Expand operand to a C string using your existing expansion engine */
+    int ex_err = EXPAND_OK;
+    char *arg = ts_node_is_null(argn)
+                  ? strdup("")
+                  : expand_one_arg(argn, input, last_status, &ex_err);
+    if (!arg) arg = strdup("");
+
+    int truth = 0;
+
+    /* File tests (+ string tests) */
+    if (strcmp(op, "-e") == 0) {
+        truth = (access(arg, F_OK) == 0);
+    } else if (strcmp(op, "-f") == 0) {
+        struct stat st; truth = (stat(arg, &st) == 0 && S_ISREG(st.st_mode));
+    } else if (strcmp(op, "-d") == 0) {
+        struct stat st; truth = (stat(arg, &st) == 0 && S_ISDIR(st.st_mode));
+    } else if (strcmp(op, "-r") == 0) {
+        truth = (access(arg, R_OK) == 0);
+    } else if (strcmp(op, "-w") == 0) {
+        truth = (access(arg, W_OK) == 0);
+    } else if (strcmp(op, "-x") == 0) {
+        truth = (access(arg, X_OK) == 0);
+    } else if (strcmp(op, "-n") == 0) {
+        truth = (arg && arg[0] != '\0');
+    } else if (strcmp(op, "-z") == 0) {
+        truth = (!arg || arg[0] == '\0');
+    } else {
+        /* Unknown operator → false for now; easy to extend later */
+        truth = 0;
+    }
+
+    free(op);
+    free(arg);
+
+    last_status = truth ? 0 : 1;
+    return last_status;
+}
+
+/* Pull the actual executable body out of an else_clause wrapper. */
+/* Pull the actual executable body out of an else_clause wrapper. */
+static TSNode unwrap_else_body(TSNode n) {
+    if (ts_node_is_null(n)) return n;
+    const char *t = ts_node_type(n);
+    if (t && strcmp(t, "else_clause") == 0) {
+        uint32_t m = ts_node_named_child_count(n);
+        for (uint32_t i = 0; i < m; i++) {
+            TSNode ch = ts_node_named_child(n, i);
+            int s = ts_node_symbol(ch);
+            if (s == sym_command ||
+                s == sym_list ||
+                s == sym_pipeline ||
+#ifdef sym_redirected_statement
+                s == sym_redirected_statement ||
+#endif
+                s == sym_variable_assignment)            /* <-- add this */
+            {
+                return ch;
+            }
+        }
+        TSNode nulln = (TSNode){0};
+        return nulln;
+    }
+    return n;
+}
+
+/* C99, no extra field-IDs required.
+   Works with the tree you printed where:
+   named children of if_statement are, in order:
+     0: condition (command or list)
+     1: then-body (command or list)
+     2: optional else-body (command or list)
+*/
+static int eval_if_statement(TSNode if_node) {
+    /* Grab condition (field preferred) and the straight then-body. */
+    TSNode cond = ts_node_child_by_field_id(if_node, conditionId);
+    uint32_t n  = ts_node_named_child_count(if_node);
+    if (ts_node_is_null(cond) && n >= 1) cond = ts_node_named_child(if_node, 0);
+
+    TSNode thenb = (n >= 2) ? ts_node_named_child(if_node, 1) : (TSNode){0};
+    if (ts_node_is_null(cond) || ts_node_is_null(thenb)) { last_status = 2; return last_status; }
+
+    /* 1) Evaluate the primary condition */
+    (void)eval_node_status(cond);
+    if (last_status == 0) {
+        (void)eval_node_status(thenb);
+        return last_status;
+    }
+
+    /* 2) Walk remaining named children looking for elif clauses (and maybe an else at the end) */
+    TSNode elseb = (TSNode){0};
+    for (uint32_t i = 2; i < n; i++) {
+        TSNode ch = ts_node_named_child(if_node, i);
+        const char *t = ts_node_type(ch);
+
+        if (t && strcmp(t, "elif_clause") == 0) {
+            /* elif_clause’s named children: test_command, then-body */
+            uint32_t m = ts_node_named_child_count(ch);
+            TSNode econd = (m >= 1) ? ts_node_named_child(ch, 0) : (TSNode){0};
+            TSNode ebody = (m >= 2) ? ts_node_named_child(ch, 1) : (TSNode){0};
+
+            if (!ts_node_is_null(econd)) (void)eval_node_status(econd);
+            if (last_status == 0) {
+                if (!ts_node_is_null(ebody)) (void)eval_node_status(ebody);
+                return last_status;   /* took this elif branch */
+            }
+        } else if (t && strcmp(t, "else_clause") == 0) {
+            elseb = ch;  /* remember; unwrap and run if no prior branch matched */
+        }
+    }
+
+    /* 3) else clause (if present) */
+    if (!ts_node_is_null(elseb)) {
+        TSNode body = unwrap_else_body(elseb);
+        if (!ts_node_is_null(body)) (void)eval_node_status(body);
+        return last_status;
+    }
+
+    /* nothing matched */
+    return last_status;  /* nonzero from the last condition */
+}
+
+
+/* Evaluate: for_statement with explicit value list:
+     for <var> in <value>...; do <body>; done
+   Tree-sitter (bash) gives:
+     variable: variable_name
+     value: (word|number|string|raw_string|simple_expansion|expansion...)
+     body: do_group
+*/
+static int eval_for_statement(TSNode for_node) {
+    /* 1) Variable name */
+    TSNode varn = ts_node_child_by_field_id(for_node, variableId);
+    if (ts_node_is_null(varn))
+        varn = ts_node_named_child(for_node, 0);
+    char *vname = ts_extract_node_text(input, varn);
+    if (!vname) vname = strdup("");
+
+    /* 2) Body */
+    TSNode body = ts_node_child_by_field_id(for_node, bodyId);
+    if (ts_node_is_null(body)) {
+        /* fall back: find named child of kind do_group/list/command */
+        uint32_t nn = ts_node_named_child_count(for_node);
+        for (uint32_t i = 0; i < nn; i++) {
+            TSNode ch = ts_node_named_child(for_node, i);
+            int s = ts_node_symbol(ch);
+            if (s == sym_do_group || s == sym_list || s == sym_command || s == sym_pipeline) {
+                body = ch; break;
+            }
+        }
+    }
+    if (ts_node_is_null(body)) {
+        free(vname);
+        last_status = 0;    /* empty body – nothing to do */
+        return last_status;
+    }
+
+    /* 3) Collect and expand all values */
+    uint32_t n = ts_node_named_child_count(for_node);
+    char **vals = NULL;
+    int nvals = 0, cap = 0;
+
+    for (uint32_t i = 0; i < n; i++) {
+        TSNode ch = ts_node_named_child(for_node, i);
+        if (ts_node_eq(ch, varn) || ts_node_eq(ch, body))
+            continue;               /* skip var and body */
+
+        /* Only take plausible "value" nodes. (Tree shows number/string here.) */
+        int sym = ts_node_symbol(ch);
+        bool looks_value =
+            sym == sym_word || sym == sym_number || sym == sym_string || sym == sym_raw_string ||
+            sym == sym_simple_expansion || sym == sym_expansion || sym == sym_command_substitution;
+
+        if (!looks_value) continue;
+
+        int err = EXPAND_OK;
+        char *val = expand_one_arg(ch, input, last_status, &err);
+        if (!val) val = strdup("");
+
+        if (nvals == cap) {
+            cap = cap ? cap * 2 : 8;
+            vals = realloc(vals, (size_t)cap * sizeof *vals);
+        }
+        vals[nvals++] = val;
+    }
+
+    /* 4) Execute body once per value, setting var each time */
+    for (int i = 0; i < nvals; i++) {
+        setenv(vname, vals[i], 1);
+        (void)eval_node_status(body);
+    }
+
+    for (int i = 0; i < nvals; i++) free(vals[i]);
+    free(vals);
+
+    /* Bash leaves variable bound to last value; we already did that. */
+    free(vname);
+    return last_status;  /* status of the last iteration (or 0 if none) */
+}
+
 
 static void execute_node(TSNode child) {
     switch (ts_node_symbol(child)) {
         case sym_comment:
             break;
 
+        case sym_if_statement:
+            (void)eval_if_statement(child);   /* updates last_status */
+            break;
+
         case sym_variable_assignment:
             handle_variable_assignment(child);
             break;
 
-        /* NEW: handle top-level list nodes */
         case sym_list:
-            (void)eval_node_status(child);   /* updates last_status */
+            (void)eval_node_status(child);    /* updates last_status */
             break;
 
-        /* NEW: handle explicit and_or nodes if your grammar exposes it */
 #ifdef sym_and_or
         case sym_and_or:
-            (void)eval_andor(child);         /* updates last_status */
+            (void)eval_andor(child);
             break;
 #endif
 
 #ifdef sym_binary_expression
-        case sym_binary_expression:          /* Some grammars use this for &&/|| */
+        case sym_binary_expression:
             (void)eval_andor(child);
             break;
 #endif
@@ -1033,9 +1333,12 @@ static void execute_node(TSNode child) {
         case sym_pipeline:
             handle_pipeline(child);
             break;
+        case sym_for_statement:
+            (void)eval_for_statement(child);
+            break;
+
 
         default: {
-            /* If there’s an operator field we can still treat it like and/or */
             TSNode opn = ts_node_child_by_field_id(child, operatorId);
             if (!ts_node_is_null(opn)) {
                 (void)eval_andor(child);
@@ -1132,6 +1435,9 @@ main(int ac, char *av[])
     DEFINE_FIELD_ID(redirect);
     DEFINE_FIELD_ID(destination);
     DEFINE_FIELD_ID(variable);
+
+
+
     ts_parser_set_language(parser, bash);
 
     list_init(&job_list);
